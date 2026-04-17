@@ -1,7 +1,8 @@
 import { logger } from "../../../utils/logger.js";
 import { sessionService } from "../../session/index.js";
+import { resolveSkillSelection } from "../../skills/index.js";
 import { runAgentLoop } from "./agent.loop.js";
-import type { AgentStreamEventHandler } from "./agent.types.js";
+import type { AgentSkillSelection, AgentStreamEventHandler } from "./agent.types.js";
 
 /**
  * Agent service 的輸入資料。
@@ -23,6 +24,8 @@ export interface RunAgentInput {
 export interface RunAgentResult {
   /** 本次對話所屬的 session 識別值。 */
   sessionId: string;
+  /** 本輪實際採用的 skill。 */
+  skillName: string;
   /** Agent 最終回覆內容。 */
   reply: string;
 }
@@ -48,16 +51,37 @@ export const agentService = {
 
     const session = await sessionService.ensureSession(sessionId);
     const historyMessages = await sessionService.getRecentMessages(session.sessionId);
+    const skillSelection: AgentSkillSelection = resolveSkillSelection({
+      historyMessages,
+      requestedSkillName: skillName,
+      userMessage: message,
+    });
+    const resolvedSkillName = skillSelection.skillName;
+
+    logger.info("Agent service resolved skill", {
+      sessionId: session.sessionId,
+      requestedSkillName: skillName || "auto",
+      resolvedSkillName: resolvedSkillName || "default",
+      source: skillSelection.source,
+      reason: skillSelection.reason,
+    });
+    await onEvent?.({
+      type: "skill_selected",
+      sessionId: session.sessionId,
+      skillName: resolvedSkillName || "default",
+      source: skillSelection.source,
+      reason: skillSelection.reason,
+    });
     await onEvent?.({
       type: "session_started",
       sessionId: session.sessionId,
-      skillName: skillName || "default",
+      skillName: resolvedSkillName || "default",
       historyMessageCount: historyMessages.length,
     });
     const loopResult = await runAgentLoop({
       userMessage: message,
       historyMessages,
-      skillName,
+      skillName: resolvedSkillName,
       onEvent,
     });
 
@@ -71,6 +95,7 @@ export const agentService = {
 
     return {
       sessionId: session.sessionId,
+      skillName: resolvedSkillName || "default",
       reply: loopResult.answer,
     };
   },

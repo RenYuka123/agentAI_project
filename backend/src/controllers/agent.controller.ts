@@ -39,6 +39,7 @@ export const chat = async (
   if (!message) {
     res.status(400).json({
       sessionId: sessionId || "",
+      skillName: skillName || "default",
       reply: "",
       error: "`message` is required.",
     });
@@ -54,6 +55,7 @@ export const chat = async (
 
     res.json({
       sessionId: result.sessionId,
+      skillName: result.skillName,
       reply: result.reply,
     });
   } catch (error) {
@@ -61,6 +63,7 @@ export const chat = async (
 
     res.status(500).json({
       sessionId: sessionId || "",
+      skillName: skillName || "default",
       reply: "",
       error: errorMessage,
     });

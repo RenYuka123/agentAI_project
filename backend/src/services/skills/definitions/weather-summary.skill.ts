@@ -14,4 +14,16 @@ export const weatherSummarySkill: AgentSkill = {
     "If rain, wind, or temperature feels notable, proactively mention daily suggestions such as bringing an umbrella or adjusting clothing.",
   ].join("\n"),
   allowedTools: ["get_weather", "summarize_text"],
+  routingHints: [
+    "天氣",
+    "weather",
+    "下雨",
+    "帶傘",
+    "氣溫",
+    "溫度",
+    "體感",
+    "濕度",
+    "風速",
+    "降雨",
+  ],
 };

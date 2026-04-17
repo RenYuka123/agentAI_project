@@ -8,6 +8,7 @@ export type {
   AgentMessage,
   AgentMessageRole,
   AgentSkill,
+  AgentSkillSelection,
   AgentStreamEvent,
   AgentStreamEventHandler,
   AnyAgentTool,

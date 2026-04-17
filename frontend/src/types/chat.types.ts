@@ -30,6 +30,8 @@ export interface ChatMessage {
 export interface ChatApiResponse extends ApiErrorResponse {
   /** 本次對話對應的 session 識別值。 */
   sessionId: string;
+  /** 本輪實際採用的 skill。 */
+  skillName: string;
   /** Agent 回覆內容。 */
   reply: string;
 }
@@ -50,7 +52,7 @@ export interface SessionMessagesApiResponse extends ApiErrorResponse {
 export interface AgentChatRequest {
   /** 既有會話識別值，未提供時由後端建立。 */
   sessionId?: string;
-  /** 本輪指定要使用的 skill。 */
+  /** 本輪指定要使用的 skill；未提供時由後端自動判斷。 */
   skillName?: string;
   /** 使用者輸入訊息。 */
   message: string;
@@ -60,6 +62,13 @@ export interface AgentChatRequest {
  * 前端顯示 Agent Timeline 用的事件格式。
  */
 export type AgentStreamEvent =
+  | {
+      type: "skill_selected";
+      sessionId: string;
+      skillName: string;
+      source: "auto" | "manual" | "default";
+      reason: string;
+    }
   | {
       type: "session_started";
       sessionId: string;

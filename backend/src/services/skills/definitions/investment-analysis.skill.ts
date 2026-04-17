@@ -13,4 +13,17 @@ export const investmentAnalysisSkill: AgentSkill = {
     "If a price lookup or calculation is needed, use the available tools instead of guessing.",
   ].join("\n"),
   allowedTools: ["get_stock_price", "calculator", "summarize_text"],
+  routingHints: [
+    "股價",
+    "股票",
+    "etf",
+    "price",
+    "報酬",
+    "投資",
+    "0050",
+    "aapl",
+    "tsla",
+    "複利",
+    "年化",
+  ],
 };

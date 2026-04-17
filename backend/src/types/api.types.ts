@@ -16,6 +16,8 @@ export interface AgentChatRequestBody {
 export interface AgentChatResponseBody {
   /** 本次對話對應的 session 識別值。 */
   sessionId: string;
+  /** 本輪實際採用的 skill。 */
+  skillName: string;
   /** Agent 最終整理後的回覆文字。 */
   reply: string;
   /** 發生錯誤時的訊息內容。 */

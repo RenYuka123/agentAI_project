@@ -93,13 +93,13 @@
               v-model="selectedSkill"
               class="w-full rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-stone-100 outline-none"
             >
-              <option value="default">default</option>
+              <option value="default">auto</option>
               <option value="investment_analysis">investment_analysis</option>
               <option value="weather_summary">weather_summary</option>
             </select>
             <p class="mt-3 text-xs leading-6 text-stone-400">
-              `investment_analysis` 會偏向投資情境回答；`weather_summary`
-              會偏向天氣重點整理與生活提醒。
+              `auto` 會先由 Agent 判斷本輪該走哪個 skill；`investment_analysis`
+              與 `weather_summary` 則會直接覆蓋自動判斷。
             </p>
           </div>
         </div>
@@ -344,6 +344,14 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
         detail: `skill: ${event.skillName}\n歷史訊息數量：${event.historyMessageCount}`,
         status: "info",
       };
+    case "skill_selected":
+      return {
+        id,
+        type: event.type,
+        title: `本輪採用 skill：${event.skillName}`,
+        detail: `來源：${event.source}\n原因：${event.reason}`,
+        status: "info",
+      };
     case "decision_requested":
       return {
         id,
@@ -507,6 +515,7 @@ const sendMessage = async () => {
 
   try {
     let finalAnswer = "";
+    let didReceiveFinalAnswer = false;
 
     await streamChatMessage(
       {
@@ -526,6 +535,7 @@ const sendMessage = async () => {
 
           if (event.type === "final_answer") {
             finalAnswer = event.answer;
+            didReceiveFinalAnswer = true;
           }
         },
       },
@@ -535,7 +545,9 @@ const sendMessage = async () => {
       await loadSessions();
     }
 
-    await appendMessage("assistant", finalAnswer || "目前沒有收到回覆。");
+    if (didReceiveFinalAnswer) {
+      await appendMessage("assistant", finalAnswer);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "發生未知錯誤。";
     timelineEntries.value.push({

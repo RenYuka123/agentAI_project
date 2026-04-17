@@ -39,6 +39,20 @@ export interface AgentSkill {
   prompt: string;
   /** 該 skill 可使用的工具名稱清單。 */
   allowedTools?: string[];
+  /** 提供給 skill selector 參考的關鍵字提示。 */
+  routingHints?: string[];
+}
+
+/**
+ * Skill 自動判斷後的標準結果。
+ */
+export interface AgentSkillSelection {
+  /** 最終採用的 skill 名稱。 */
+  skillName?: string;
+  /** skill 來源模式。 */
+  source: "auto" | "manual" | "default";
+  /** 選擇 skill 的說明。 */
+  reason: string;
 }
 
 /**
@@ -69,6 +83,18 @@ export interface RunAgentLoopResult {
  * Agent SSE 事件格式。
  */
 export type AgentStreamEvent =
+  | {
+      /** 表示本輪在進入 agent loop 前已完成 skill 判斷。 */
+      type: "skill_selected";
+      /** 對話所屬的 session 識別值。 */
+      sessionId: string;
+      /** 最終採用的 skill。 */
+      skillName: string;
+      /** skill 來源模式。 */
+      source: AgentSkillSelection["source"];
+      /** skill 判斷說明。 */
+      reason: string;
+    }
   | {
       /** 表示本輪對話已綁定 session。 */
       type: "session_started";
