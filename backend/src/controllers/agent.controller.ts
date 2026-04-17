@@ -1,0 +1,228 @@
+import type { Request, Response } from "express";
+import { agentService } from "../services/agent/index.js";
+import { sessionService } from "../services/session/index.js";
+import type { AgentStreamEvent } from "../services/agent/index.js";
+import type {
+  AgentChatRequestBody,
+  AgentChatResponseBody,
+  AgentChatStreamRequestBody,
+  AgentDeleteSessionResponseBody,
+  AgentSessionsResponseBody,
+  AgentSessionMessagesResponseBody,
+} from "../types/api.types.js";
+
+/**
+ * 將 SSE 事件寫入 response。
+ *
+ * @param res Express response。
+ * @param event 要寫出的事件資料。
+ */
+const writeSseEvent = (res: Response, event: AgentStreamEvent): void => {
+  res.write(`event: ${event.type}\n`);
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
+};
+
+/**
+ * Controller 只處理 HTTP 請求與回應，Agent 邏輯交給 service。
+ *
+ * @param req Express request，包含使用者輸入訊息。
+ * @param res Express response，回傳 agent 最終結果。
+ */
+export const chat = async (
+  req: Request<unknown, AgentChatResponseBody, AgentChatRequestBody>,
+  res: Response<AgentChatResponseBody>,
+) => {
+  const message = req.body?.message?.trim();
+  const sessionId = req.body?.sessionId?.trim();
+  const skillName = req.body?.skillName?.trim();
+
+  if (!message) {
+    res.status(400).json({
+      sessionId: sessionId || "",
+      reply: "",
+      error: "`message` is required.",
+    });
+    return;
+  }
+
+  try {
+    const result = await agentService.run({
+      sessionId,
+      skillName,
+      message,
+    });
+
+    res.json({
+      sessionId: result.sessionId,
+      reply: result.reply,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Internal server error";
+
+    res.status(500).json({
+      sessionId: sessionId || "",
+      reply: "",
+      error: errorMessage,
+    });
+  }
+};
+
+/**
+ * 以 SSE 方式串流 Agent 執行過程，讓前端可以即時顯示 Timeline。
+ *
+ * @param req Express request，包含使用者輸入訊息。
+ * @param res Express response，以 SSE 格式回傳事件流。
+ */
+export const chatStream = async (
+  req: Request<unknown, unknown, AgentChatStreamRequestBody>,
+  res: Response,
+) => {
+  const message = req.body?.message?.trim();
+  const sessionId = req.body?.sessionId?.trim();
+  const skillName = req.body?.skillName?.trim();
+
+  if (!message) {
+    res.status(400).json({
+      error: "`message` is required.",
+    });
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  try {
+    await agentService.run({
+      sessionId,
+      skillName,
+      message,
+      onEvent: async (event) => {
+        writeSseEvent(res, event);
+      },
+    });
+    res.end();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Internal server error";
+    writeSseEvent(res, {
+      type: "error",
+      message: errorMessage,
+    });
+    res.end();
+  }
+};
+
+/**
+ * 讀取指定 session 的歷史訊息，供前端重整畫面後回填對話內容。
+ *
+ * @param req Express request，包含 sessionId 路徑參數。
+ * @param res Express response，回傳整理後的歷史訊息。
+ */
+export const getSessionMessages = async (
+  req: Request<{ sessionId: string }, AgentSessionMessagesResponseBody>,
+  res: Response<AgentSessionMessagesResponseBody>,
+) => {
+  const sessionId = req.params.sessionId?.trim();
+
+  if (!sessionId) {
+    res.status(400).json({
+      sessionId: "",
+      messages: [],
+      error: "`sessionId` is required.",
+    });
+    return;
+  }
+
+  try {
+    const messages = await sessionService.getVisibleMessages(sessionId);
+
+    res.json({
+      sessionId,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        createdAt: message.createdAt.toISOString(),
+      })),
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Internal server error";
+
+    res.status(500).json({
+      sessionId,
+      messages: [],
+      error: errorMessage,
+    });
+  }
+};
+
+/**
+ * 讀取所有 session 摘要，供前端側邊欄顯示。
+ *
+ * @param _req Express request。
+ * @param res Express response，回傳 session 摘要列表。
+ */
+export const getSessions = async (
+  _req: Request,
+  res: Response<AgentSessionsResponseBody>,
+) => {
+  try {
+    const sessions = await sessionService.getSessionList();
+
+    res.json({
+      sessions: sessions.map((session) => ({
+        sessionId: session.sessionId,
+        title: session.title,
+        createdAt: session.createdAt.toISOString(),
+        updatedAt: session.updatedAt.toISOString(),
+      })),
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Internal server error";
+
+    res.status(500).json({
+      sessions: [],
+      error: errorMessage,
+    });
+  }
+};
+
+/**
+ * 刪除指定 session 與其歷史訊息。
+ *
+ * @param req Express request，包含 sessionId 路徑參數。
+ * @param res Express response，回傳刪除結果。
+ */
+export const deleteSession = async (
+  req: Request<{ sessionId: string }, AgentDeleteSessionResponseBody>,
+  res: Response<AgentDeleteSessionResponseBody>,
+) => {
+  const sessionId = req.params.sessionId?.trim();
+
+  if (!sessionId) {
+    res.status(400).json({
+      sessionId: "",
+      deleted: false,
+      error: "`sessionId` is required.",
+    });
+    return;
+  }
+
+  try {
+    await sessionService.deleteSession(sessionId);
+
+    res.json({
+      sessionId,
+      deleted: true,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Internal server error";
+
+    res.status(500).json({
+      sessionId,
+      deleted: false,
+      error: errorMessage,
+    });
+  }
+};
