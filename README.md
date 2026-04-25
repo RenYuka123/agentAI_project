@@ -29,5 +29,6 @@ pnpm dev
 ## Docs
 
 - [Agent 流程文件](./docs/agent-flow.md)
+- [Skill / Role / Tool 邊界文件](./docs/agent-boundaries.md)
 - [測試案例清單](./docs/testing-checklist.md)
 - [開發想法紀錄](./docs/thought-log.md)

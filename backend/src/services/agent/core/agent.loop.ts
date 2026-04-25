@@ -1,5 +1,6 @@
 import { appConfig } from "../../../config/env.js";
 import { logger } from "../../../utils/logger.js";
+import { getAgentRoleByName } from "../../agents/index.js";
 import { llmService } from "../../llm/index.js";
 import { executeTool } from "../../tools/index.js";
 import type { ToolExecutionResult } from "../../tools/index.js";
@@ -107,12 +108,16 @@ const createToolContext = (
  * @returns 最終答案與本輪新增訊息。
  */
 export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLoopResult> => {
-  const { onEvent, userMessage, historyMessages = [], skillName } = input;
-  const tools = getToolList(skillName);
+  const { disableTools = false, onEvent, userMessage, historyMessages = [], roleName = "primary", skillName } = input;
+  const roleConfig = getAgentRoleByName(roleName);
+  const tools = disableTools ? [] : getToolList(skillName, roleName);
+  const maxLoops = roleConfig?.maxLoops ?? appConfig.maxAgentLoops;
   logger.info("Agent loop started", {
+    disableTools,
     toolCount: tools.length,
-    maxLoops: appConfig.maxAgentLoops,
+    maxLoops,
     historyMessageCount: historyMessages.length,
+    roleName,
     skillName: skillName || "default",
   });
 
@@ -135,7 +140,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
   const messages: AgentMessage[] = [
     {
       role: "system",
-      content: buildAgentSystemPrompt(tools, skillName),
+      content: buildAgentSystemPrompt(tools, roleName, skillName),
     },
     ...historyMessages,
     {
@@ -155,7 +160,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
    * 2. 若是 final 就結束
    * 3. 若是 tool_call 就執行工具並把結果回灌
    */
-  for (let attempt = 0; attempt < appConfig.maxAgentLoops; attempt += 1) {
+  for (let attempt = 0; attempt < maxLoops; attempt += 1) {
     logger.info("Agent loop requesting decision", {
       attempt: attempt + 1,
       messageCount: messages.length,
@@ -164,6 +169,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
       {
         type: "decision_requested",
         attempt: attempt + 1,
+        roleName,
         messageCount: messages.length,
       },
       onEvent,
@@ -175,6 +181,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
       {
         type: "agent_decision",
         attempt: attempt + 1,
+        roleName,
         decision,
       },
       onEvent,
@@ -193,6 +200,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
         {
           type: "final_answer",
           attempt: attempt + 1,
+          roleName,
           answer: decision.answer,
         },
         onEvent,
@@ -215,6 +223,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
         {
           type: "invalid_tool_decision",
           attempt: attempt + 1,
+          roleName,
           decision,
           availableToolNames,
         },
@@ -272,6 +281,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
       {
         type: "tool_started",
         attempt: attempt + 1,
+        roleName,
         toolName: decision.toolName,
         toolInput: decision.toolInput,
       },
@@ -287,6 +297,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
       {
         type: "tool_completed",
         attempt: attempt + 1,
+        roleName,
         toolName: decision.toolName,
         result: toolResult,
       },
@@ -327,7 +338,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
   }
 
   logger.error("Agent loop exceeded max loop count", {
-    maxLoops: appConfig.maxAgentLoops,
+    maxLoops,
   });
-  throw new Error(`Agent exceeded max loop count (${appConfig.maxAgentLoops}).`);
+  throw new Error(`Agent exceeded max loop count (${maxLoops}).`);
 };

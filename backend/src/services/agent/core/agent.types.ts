@@ -1,4 +1,6 @@
 import type { JsonObject } from "../../../types/common.types.js";
+import type { AgentRoleName } from "../../agents/index.js";
+import type { OrchestrationAssessment } from "../../orchestration/index.js";
 export type {
   AgentTool,
   ToolExecutionError,
@@ -65,6 +67,10 @@ export interface RunAgentLoopInput {
   historyMessages?: AgentMessage[];
   /** 本輪指定要使用的 skill。 */
   skillName?: string;
+  /** 本輪執行使用的 role。 */
+  roleName?: AgentRoleName;
+  /** 是否禁止本輪使用工具。 */
+  disableTools?: boolean;
   /** 流式模式下的事件回呼。 */
   onEvent?: AgentStreamEventHandler;
 }
@@ -96,12 +102,91 @@ export type AgentStreamEvent =
       reason: string;
     }
   | {
+      /** 表示已完成 orchestration gate 評估。 */
+      type: "orchestration_assessed";
+      /** 對話所屬的 session 識別值。 */
+      sessionId: string;
+      /** gate 評估結果。 */
+      assessment: OrchestrationAssessment;
+    }
+  | {
+      /** 表示進入多 agent orchestration 流程。 */
+      type: "orchestration_started";
+      /** 對話所屬的 session 識別值。 */
+      sessionId: string;
+      /** 規劃出的子任務數量。 */
+      taskCount: number;
+      /** 為何採用 orchestration。 */
+      reason: string;
+      /** task plan 來源。 */
+      source: "llm" | "fallback";
+      /** 本輪規劃出的任務清單。 */
+      tasks: Array<{
+        taskId: string;
+        title: string;
+        instruction: string;
+        role: AgentRoleName;
+      }>;
+    }
+  | {
+      /** 表示某個子任務開始執行。 */
+      type: "subtask_started";
+      /** 對話所屬的 session 識別值。 */
+      sessionId: string;
+      /** 子任務識別值。 */
+      taskId: string;
+      /** 子任務標題。 */
+      title: string;
+      /** 執行角色。 */
+      role: AgentRoleName;
+    }
+  | {
+      /** 表示某個子任務執行完成。 */
+      type: "subtask_completed";
+      /** 對話所屬的 session 識別值。 */
+      sessionId: string;
+      /** 子任務識別值。 */
+      taskId: string;
+      /** 子任務標題。 */
+      title: string;
+      /** 執行角色。 */
+      role: AgentRoleName;
+      /** 子任務輸出。 */
+      output: string;
+    }
+  | {
+      /** 表示某個子任務執行失敗。 */
+      type: "subtask_failed";
+      /** 對話所屬的 session 識別值。 */
+      sessionId: string;
+      /** 子任務識別值。 */
+      taskId: string;
+      /** 子任務標題。 */
+      title: string;
+      /** 執行角色。 */
+      role: AgentRoleName;
+      /** 錯誤內容。 */
+      error: string;
+    }
+  | {
+      /** 表示 orchestration 已完成。 */
+      type: "orchestration_completed";
+      /** 對話所屬的 session 識別值。 */
+      sessionId: string;
+      /** 規劃出的子任務數量。 */
+      taskCount: number;
+      /** 實際完成的子任務數量。 */
+      completedTaskCount: number;
+    }
+  | {
       /** 表示本輪對話已綁定 session。 */
       type: "session_started";
       /** 對話所屬的 session 識別值。 */
       sessionId: string;
       /** 目前指定的 skill。 */
       skillName: string;
+      /** 本輪使用的角色。 */
+      roleName: AgentRoleName;
       /** 已載入的歷史訊息數量。 */
       historyMessageCount: number;
     }
@@ -110,6 +195,8 @@ export type AgentStreamEvent =
       type: "decision_requested";
       /** 第幾輪決策。 */
       attempt: number;
+      /** 目前執行的角色。 */
+      roleName: AgentRoleName;
       /** 本輪送給模型的訊息數量。 */
       messageCount: number;
     }
@@ -118,6 +205,8 @@ export type AgentStreamEvent =
       type: "agent_decision";
       /** 第幾輪決策。 */
       attempt: number;
+      /** 目前執行的角色。 */
+      roleName: AgentRoleName;
       /** 模型回傳的決策內容。 */
       decision: AgentDecision;
     }
@@ -126,6 +215,8 @@ export type AgentStreamEvent =
       type: "invalid_tool_decision";
       /** 第幾輪決策。 */
       attempt: number;
+      /** 目前執行的角色。 */
+      roleName: AgentRoleName;
       /** 原始決策內容。 */
       decision: AgentDecision;
       /** 當前可用工具名稱清單。 */
@@ -136,6 +227,8 @@ export type AgentStreamEvent =
       type: "tool_started";
       /** 第幾輪決策。 */
       attempt: number;
+      /** 目前執行的角色。 */
+      roleName: AgentRoleName;
       /** 工具名稱。 */
       toolName: string;
       /** 工具輸入資料。 */
@@ -146,6 +239,8 @@ export type AgentStreamEvent =
       type: "tool_completed";
       /** 第幾輪決策。 */
       attempt: number;
+      /** 目前執行的角色。 */
+      roleName: AgentRoleName;
       /** 工具名稱。 */
       toolName: string;
       /** 工具執行結果。 */
@@ -156,6 +251,8 @@ export type AgentStreamEvent =
       type: "final_answer";
       /** 第幾輪決策。 */
       attempt: number;
+      /** 目前執行的角色。 */
+      roleName: AgentRoleName;
       /** 最終答案。 */
       answer: string;
     }

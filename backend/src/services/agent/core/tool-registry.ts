@@ -1,3 +1,5 @@
+import { getAgentRoleByName } from "../../agents/index.js";
+import type { AgentRoleName } from "../../agents/index.js";
 import { calculatorTool, getStockPriceTool, getWeatherTool, summarizeTextTool } from "../../tools/index.js";
 import { getSkillByName } from "../../skills/index.js";
 import type { AnyAgentTool } from "../../tools/index.js";
@@ -9,14 +11,19 @@ const tools: AnyAgentTool[] = [calculatorTool, summarizeTextTool, getStockPriceT
  *
  * @returns 目前可用的工具清單。
  */
-export const getToolList = (skillName?: string): AnyAgentTool[] => {
+export const getToolList = (skillName?: string, roleName?: AgentRoleName): AnyAgentTool[] => {
   const skill = getSkillByName(skillName);
+  const role = getAgentRoleByName(roleName || "primary");
+  const roleScopedTools =
+    role && Array.isArray(role.allowedTools)
+      ? tools.filter((tool) => role.allowedTools?.includes(tool.name))
+      : tools;
 
   if (!skill?.allowedTools?.length) {
-    return tools;
+    return roleScopedTools;
   }
 
-  return tools.filter((tool) => skill.allowedTools?.includes(tool.name));
+  return roleScopedTools.filter((tool) => skill.allowedTools?.includes(tool.name));
 };
 
 /**

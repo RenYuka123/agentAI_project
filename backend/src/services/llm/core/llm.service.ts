@@ -128,6 +128,9 @@ const createLocalFallbackDecision = (messages: AgentMessage[]): AgentDecision =>
 
 const provider = new OpenAiProvider();
 
+const hasMissingApiKeyError = (error: unknown): boolean =>
+  error instanceof Error && error.message.includes("LLM_API_KEY is not configured");
+
 export const llmService = {
   async askAgentDecision(messages: AgentMessage[]): Promise<AgentDecision> {
     try {
@@ -135,7 +138,7 @@ export const llmService = {
       logger.info("LLM service received provider decision", decision);
       return decision;
     } catch (error) {
-      if (error instanceof Error && error.message.includes("LLM_API_KEY is not configured")) {
+      if (hasMissingApiKeyError(error)) {
         logger.warn("LLM API key is missing, using local fallback decision");
         const fallbackDecision = createLocalFallbackDecision(messages);
         logger.info("LLM service generated local fallback decision", fallbackDecision);
@@ -143,6 +146,33 @@ export const llmService = {
       }
 
       logger.error("LLM service failed to get decision", error);
+      throw error;
+    }
+  },
+
+  async askJson<T>(input: {
+    messages: AgentMessage[];
+    validate: (value: unknown) => value is T;
+    fallback?: () => T;
+  }): Promise<T> {
+    const { fallback, messages, validate } = input;
+
+    try {
+      const payload = await provider.getJsonResponse(messages);
+
+      if (!validate(payload)) {
+        throw new Error("LLM provider returned invalid structured JSON payload.");
+      }
+
+      logger.info("LLM service received structured JSON payload");
+      return payload;
+    } catch (error) {
+      if (fallback && hasMissingApiKeyError(error)) {
+        logger.warn("LLM API key is missing, using structured JSON fallback");
+        return fallback();
+      }
+
+      logger.error("LLM service failed to get structured JSON payload", error);
       throw error;
     }
   },

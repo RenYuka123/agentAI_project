@@ -88,3 +88,31 @@ export interface AgentDeleteSessionResponseBody {
  * Agent 串流 API 的請求內容。
  */
 export interface AgentChatStreamRequestBody extends AgentChatRequestBody {}
+
+/**
+ * 單人畫圖猜測 API 的請求內容。
+ */
+export interface SinglePlayerGuessRequestBody {
+  /** 使用者實際選到的題目。 */
+  answer: string;
+  /** Canvas 匯出的 PNG data URL。 */
+  imageDataUrl: string;
+  /** 是否為時間到自動送出。 */
+  timedOut?: boolean;
+}
+
+/**
+ * 單人畫圖猜測 API 的回應內容。
+ */
+export interface SinglePlayerGuessResponseBody {
+  /** 後端回傳的猜測結果。 */
+  guess: string;
+  /** 後端給的簡短評語。 */
+  comment: string;
+  /** 這次猜測的信心程度。 */
+  confidence: "high" | "medium" | "low";
+  /** 是否判定為猜對。 */
+  isCorrect: boolean;
+  /** 發生錯誤時的訊息內容。 */
+  error?: string;
+}

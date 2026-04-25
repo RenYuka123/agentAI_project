@@ -70,19 +70,84 @@ export type AgentStreamEvent =
       reason: string;
     }
   | {
+      type: "orchestration_assessed";
+      sessionId: string;
+      assessment: {
+        shouldOrchestrate: boolean;
+        score: number;
+        strategy: "single_agent" | "sequential_multi_agent";
+        confidence: "low" | "medium" | "high";
+        source: "rule" | "hybrid_llm";
+        reasons: string[];
+        signals: {
+          messageLength: number;
+          connectorCount: number;
+          intentCount: number;
+          hasExplicitMultiStepCue: boolean;
+          hasFollowUpLanguage: boolean;
+          matchedSkillName?: string;
+        };
+      };
+    }
+  | {
+      type: "orchestration_started";
+      sessionId: string;
+      taskCount: number;
+      reason: string;
+      source: "llm" | "fallback";
+      tasks: Array<{
+        taskId: string;
+        title: string;
+        instruction: string;
+        role: "primary" | "planner" | "worker";
+      }>;
+    }
+  | {
+      type: "subtask_started";
+      sessionId: string;
+      taskId: string;
+      title: string;
+      role: "primary" | "planner" | "worker";
+    }
+  | {
+      type: "subtask_completed";
+      sessionId: string;
+      taskId: string;
+      title: string;
+      role: "primary" | "planner" | "worker";
+      output: string;
+    }
+  | {
+      type: "subtask_failed";
+      sessionId: string;
+      taskId: string;
+      title: string;
+      role: "primary" | "planner" | "worker";
+      error: string;
+    }
+  | {
+      type: "orchestration_completed";
+      sessionId: string;
+      taskCount: number;
+      completedTaskCount: number;
+    }
+  | {
       type: "session_started";
       sessionId: string;
       skillName: string;
+      roleName: "primary" | "planner" | "worker";
       historyMessageCount: number;
     }
   | {
       type: "decision_requested";
       attempt: number;
+      roleName: "primary" | "planner" | "worker";
       messageCount: number;
     }
   | {
       type: "agent_decision";
       attempt: number;
+      roleName: "primary" | "planner" | "worker";
       decision: {
         type: "final";
         answer: string;
@@ -95,6 +160,7 @@ export type AgentStreamEvent =
   | {
       type: "invalid_tool_decision";
       attempt: number;
+      roleName: "primary" | "planner" | "worker";
       decision: {
         type: "final";
         answer: string;
@@ -108,12 +174,14 @@ export type AgentStreamEvent =
   | {
       type: "tool_started";
       attempt: number;
+      roleName: "primary" | "planner" | "worker";
       toolName: string;
       toolInput: Record<string, unknown>;
     }
   | {
       type: "tool_completed";
       attempt: number;
+      roleName: "primary" | "planner" | "worker";
       toolName: string;
       result: {
         ok: boolean;
@@ -133,6 +201,7 @@ export type AgentStreamEvent =
   | {
       type: "final_answer";
       attempt: number;
+      roleName: "primary" | "planner" | "worker";
       answer: string;
     }
   | {

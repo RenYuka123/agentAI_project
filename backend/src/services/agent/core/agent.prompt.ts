@@ -1,3 +1,5 @@
+import { getAgentRoleByName } from "../../agents/index.js";
+import type { AgentRoleName } from "../../agents/index.js";
 import { getSkillByName } from "../../skills/index.js";
 import type { AnyAgentTool } from "../../tools/index.js";
 
@@ -25,13 +27,19 @@ const buildToolDescriptions = (tools: AnyAgentTool[]): string =>
  * 3. 多步驟工具串接規則
  * 4. 最終回答品質要求，例如同語言、自然語言、不要只回裸數字
  *
+ * @param roleName 目前執行的 agent role。
  * @param skillName 目前指定的 skill 名稱。
  * @param tools 目前可供 agent 使用的工具列表。
  * @returns 提供給模型的 system prompt。
  */
-export const buildAgentSystemPrompt = (tools: AnyAgentTool[], skillName?: string): string => {
+export const buildAgentSystemPrompt = (
+  tools: AnyAgentTool[],
+  roleName: AgentRoleName = "primary",
+  skillName?: string,
+): string => {
   const toolDescriptions = buildToolDescriptions(tools);
   const skill = getSkillByName(skillName);
+  const role = getAgentRoleByName(roleName);
 
   return [
     /**
@@ -43,6 +51,14 @@ export const buildAgentSystemPrompt = (tools: AnyAgentTool[], skillName?: string
     "If the task requires multiple steps, you may call tools across multiple turns.",
     "Call only one tool at a time.",
     "After each tool result, decide whether another tool is needed or whether you can return the final answer.",
+    ...(role
+      ? [
+          "Current role configuration:",
+          `Role name: ${role.name}`,
+          `Role description: ${role.description}`,
+          role.prompt,
+        ]
+      : []),
     /**
      * 如果指定 skill，將 skill 的場景規則一起提供給模型。
      */
@@ -54,6 +70,12 @@ export const buildAgentSystemPrompt = (tools: AnyAgentTool[], skillName?: string
           skill.prompt,
         ]
       : []),
+    ...(tools.length > 0
+      ? []
+      : [
+          "No tools are available for this run.",
+          "You must answer directly and cannot request a tool call.",
+        ]),
     /**
      * 告訴模型目前有哪些工具可用，以及每個工具的輸入格式。
      */

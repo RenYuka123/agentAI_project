@@ -71,7 +71,7 @@ const isAgentDecision = (value: unknown): value is AgentDecision => {
 };
 
 export class OpenAiProvider implements LlmProvider {
-  async getAgentDecision(messages: AgentMessage[]): Promise<AgentDecision> {
+  async getJsonResponse(messages: AgentMessage[]): Promise<unknown> {
     if (!llmConfig.apiKey) {
       throw new Error("LLM_API_KEY is not configured.");
     }
@@ -117,14 +117,28 @@ export class OpenAiProvider implements LlmProvider {
 
     const parsed = safeJsonParse(content);
 
-    if (!parsed.ok || !isAgentDecision(parsed.data)) {
-      logger.error("LLM provider returned invalid decision payload", {
+    if (!parsed.ok) {
+      logger.error("LLM provider returned invalid JSON payload", {
         content,
+      });
+      throw new Error("LLM provider returned invalid JSON.");
+    }
+
+    logger.info("LLM provider parsed JSON successfully");
+    return parsed.data;
+  }
+
+  async getAgentDecision(messages: AgentMessage[]): Promise<AgentDecision> {
+    const parsedData = await this.getJsonResponse(messages);
+
+    if (!isAgentDecision(parsedData)) {
+      logger.error("LLM provider returned invalid decision payload", {
+        parsedData,
       });
       throw new Error("LLM provider returned invalid agent decision JSON.");
     }
 
-    logger.info("LLM provider parsed decision successfully", parsed.data);
-    return parsed.data;
+    logger.info("LLM provider parsed decision successfully", parsedData);
+    return parsedData;
   }
 }

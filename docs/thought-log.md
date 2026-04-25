@@ -78,6 +78,66 @@ Agent 後端與前端聊天流程第一版
 
 ---
 
+## 2026-04-25
+
+### 主題
+
+Agent 從單一 loop 演進到 multi-agent v1 / v1.1
+
+### 當下想法
+
+- 目前專案已經有 `agent`、`skills`、`tools` 分層，適合往 orchestration 往上長
+- 不想一開始就做成 agent 彼此自由對話，先做 `orchestrator -> planner -> worker -> primary`
+- multi-agent 先以「可控、可 debug」為優先，不追求一開始就平行執行
+- `skill`、`role`、`tool` 三者需要先切清楚，不然後面會越加越亂
+
+### 已做決策
+
+- 保留原本單 agent 流程作為 fallback
+- 新增 orchestration 層，讓 `agentService` 可以判斷是否切到 multi-agent
+- 先用 `shouldUseOrchestration()` 做 rule-based gate
+- 多 agent 第一版採序列執行，不做平行
+- `planner` 不使用工具，`worker` 負責執行子任務，`primary` 負責最後整合
+- planner 與 synthesizer 都先接成 role-aware agent，並保留 fallback
+- timeline 前端改成右側活動欄，方便觀察 planner / worker / primary 流程
+- 補一份 `skill / role / tool` 邊界文件，作為後續新增功能時的判準
+
+### 原因
+
+- 先保留單 agent 路徑，能降低改動風險
+- rule-based orchestration gate 比較穩定，也比較好 debug
+- 序列執行可以讓前一個 worker 的結果直接成為下一個 worker 的上下文
+- role-aware flow 比較能練到 multi-agent 真正的分工，而不只是多 call 幾次模型
+- timeline 若能看出 role 與 subtask，會比只看最終答案更容易理解系統行為
+- 邊界文件可以避免把場景、能力、分工混在一起
+
+### 目前理解
+
+- `skill` 決定場景
+- `role` 決定分工
+- `tool` 決定能力
+- `auto` 只代表 skill 不由前端手動指定，不代表一定是單 agent
+- 是否進 multi-agent 目前由 `shouldUseOrchestration()` 判斷
+- 目前的 multi-agent 比較像 pipeline，不是 parallel workers
+
+### 待確認事項
+
+- orchestration gate 是否要升級成 hybrid router，而不只是 rule-based
+- planner 之後是否要輸出 task dependency，支援部分平行執行
+- worker 結果之後要不要改成結構化 artifact，而不只是文字摘要
+- skill 選單未來是否只保留給開發 / 測試模式
+- timeline 是否要顯示 planner 拆出的原始 task instruction
+
+### 下一步候選
+
+1. 討論 orchestration gate 的升級策略
+2. 討論 task dependency 與部分平行執行設計
+3. 設計 worker artifact / shared context 格式
+4. 進一步整理 `agent.loop.ts` 的核心流程文件
+5. 依 `agent-boundaries.md` 檢查未來新功能該放在哪一層
+
+---
+
 ## 紀錄模板
 
 ```md

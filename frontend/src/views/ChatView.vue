@@ -125,95 +125,113 @@
             {{ isLoading ? "Agent thinking..." : "Ready" }}
           </div>
         </header>
-
-        <section class="border-b border-white/10 bg-black/10 px-5 py-4 sm:px-6">
-          <div class="mb-3 flex items-center justify-between">
-            <p class="text-xs uppercase tracking-[0.24em] text-amber-200/60">Timeline</p>
-            <p class="text-xs text-stone-400">即時顯示 Agent 決策與工具流程</p>
-          </div>
-          <div class="max-h-44 space-y-2 overflow-y-auto pr-1">
-            <article
-              v-for="entry in timelineEntries"
-              :key="entry.id"
-              class="rounded-2xl border px-3 py-3 text-sm"
-              :class="{
-                'border-white/10 bg-white/5': entry.status === 'info',
-                'border-emerald-300/20 bg-emerald-300/10': entry.status === 'success',
-                'border-rose-300/20 bg-rose-300/10': entry.status === 'error',
-              }"
-            >
-              <p class="font-medium text-stone-100">{{ entry.title }}</p>
-              <p v-if="entry.detail" class="mt-1 whitespace-pre-wrap text-xs leading-6 text-stone-300">
-                {{ entry.detail }}
-              </p>
-            </article>
-            <p v-if="!timelineEntries.length" class="text-sm leading-6 text-stone-400">
-              送出訊息後，這裡會即時顯示模型決策、工具執行與完成狀態。
-            </p>
-          </div>
-        </section>
-
-        <div
-          ref="messageListRef"
-          class="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6"
-        >
-          <article
-            v-for="message in messages"
-            :key="message.id"
-            class="flex"
-            :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
-          >
+        <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <div class="flex min-h-0 flex-1 flex-col">
             <div
-              class="max-w-3xl rounded-[1.5rem] px-4 py-3 text-sm leading-7 shadow-[0_16px_40px_rgba(0,0,0,0.18)] sm:px-5"
-              :class="{
-                'bg-amber-300 text-slate-950': message.role === 'user',
-                'bg-white/10 text-stone-100': message.role === 'assistant',
-                'bg-rose-400/15 text-rose-100 ring-1 ring-rose-300/20':
-                  message.role === 'system',
-              }"
+              ref="messageListRef"
+              class="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6"
             >
-              <p
-                class="mb-2 text-[11px] uppercase tracking-[0.24em] opacity-60"
+              <article
+                v-for="message in messages"
+                :key="message.id"
+                class="flex"
+                :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
               >
-                {{
-                  message.role === "user"
-                    ? "You"
-                    : message.role === "assistant"
-                      ? "Agent"
-                      : "System"
-                }}
-              </p>
-              <p class="whitespace-pre-wrap">{{ message.content }}</p>
+                <div
+                  class="max-w-3xl rounded-[1.5rem] px-4 py-3 text-sm leading-7 shadow-[0_16px_40px_rgba(0,0,0,0.18)] sm:px-5"
+                  :class="{
+                    'bg-amber-300 text-slate-950': message.role === 'user',
+                    'bg-white/10 text-stone-100': message.role === 'assistant',
+                    'bg-rose-400/15 text-rose-100 ring-1 ring-rose-300/20':
+                      message.role === 'system',
+                  }"
+                >
+                  <p
+                    class="mb-2 text-[11px] uppercase tracking-[0.24em] opacity-60"
+                  >
+                    {{
+                      message.role === "user"
+                        ? "You"
+                        : message.role === "assistant"
+                          ? "Agent"
+                          : "System"
+                    }}
+                  </p>
+                  <p class="whitespace-pre-wrap">{{ message.content }}</p>
+                </div>
+              </article>
             </div>
-          </article>
-        </div>
 
-        <footer class="border-t border-white/10 bg-black/10 p-4 sm:p-5">
-          <div
-            class="rounded-[1.75rem] border border-white/10 bg-slate-900/55 p-3 shadow-inner"
-          >
-            <textarea
-              v-model="inputMessage"
-              rows="4"
-              class="w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-7 text-stone-100 outline-none placeholder:text-stone-400/70"
-              placeholder="輸入你的問題，例如：幫我算 10000 * 1.05^3"
-              @keydown="handleKeydown"
-            />
-
-            <div class="mt-3 flex items-center justify-between gap-3">
-              <p class="text-xs text-stone-400">
-                Enter 送出，Shift + Enter 換行
-              </p>
-              <button
-                class="inline-flex items-center justify-center rounded-full bg-amber-300 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:bg-stone-500/60 disabled:text-stone-200"
-                :disabled="isLoading || !inputMessage.trim()"
-                @click="sendMessage"
+            <footer class="border-t border-white/10 bg-black/10 p-4 sm:p-5">
+              <div
+                class="rounded-[1.75rem] border border-white/10 bg-slate-900/55 p-3 shadow-inner"
               >
-                {{ isLoading ? "傳送中..." : "送出訊息" }}
-              </button>
-            </div>
+                <textarea
+                  v-model="inputMessage"
+                  rows="4"
+                  class="w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-7 text-stone-100 outline-none placeholder:text-stone-400/70"
+                  placeholder="輸入你的問題，例如：幫我算 10000 * 1.05^3"
+                  @keydown="handleKeydown"
+                />
+
+                <div class="mt-3 flex items-center justify-between gap-3">
+                  <p class="text-xs text-stone-400">
+                    Enter 送出，Shift + Enter 換行
+                  </p>
+                  <button
+                    class="inline-flex items-center justify-center rounded-full bg-amber-300 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:bg-stone-500/60 disabled:text-stone-200"
+                    :disabled="isLoading || !inputMessage.trim()"
+                    @click="sendMessage"
+                  >
+                    {{ isLoading ? "傳送中..." : "送出訊息" }}
+                  </button>
+                </div>
+              </div>
+            </footer>
           </div>
-        </footer>
+
+          <aside
+            class="flex max-h-[32rem] min-h-[18rem] w-full flex-col border-t border-white/10 bg-black/10 lg:max-h-none lg:min-h-0 lg:w-[21rem] lg:border-l lg:border-t-0"
+          >
+            <div class="border-b border-white/10 px-5 py-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs uppercase tracking-[0.24em] text-amber-200/60">
+                  Timeline
+                </p>
+                <p class="text-xs text-stone-400">Planner to Worker</p>
+              </div>
+              <p class="mt-2 text-xs leading-6 text-stone-400">
+                即時顯示 Agent 決策、工具執行與 orchestration 流程。
+              </p>
+            </div>
+            <div class="flex-1 space-y-2 overflow-y-auto px-4 py-4">
+              <article
+                v-for="entry in timelineEntries"
+                :key="entry.id"
+                class="rounded-2xl border px-3 py-3 text-sm"
+                :class="{
+                  'border-white/10 bg-white/5': entry.status === 'info',
+                  'border-emerald-300/20 bg-emerald-300/10': entry.status === 'success',
+                  'border-rose-300/20 bg-rose-300/10': entry.status === 'error',
+                }"
+              >
+                <p class="font-medium text-stone-100">{{ entry.title }}</p>
+                <p
+                  v-if="entry.detail"
+                  class="mt-1 whitespace-pre-wrap text-xs leading-6 text-stone-300"
+                >
+                  {{ entry.detail }}
+                </p>
+              </article>
+              <p
+                v-if="!timelineEntries.length"
+                class="rounded-2xl border border-dashed border-white/10 bg-white/5 px-3 py-4 text-sm leading-6 text-stone-400"
+              >
+                送出訊息後，這裡會像聊天室側邊活動欄一樣，持續顯示 planner、worker 與工具流程。
+              </p>
+            </div>
+          </aside>
+        </div>
       </section>
     </section>
   </main>
@@ -256,6 +274,12 @@ const currentSessionTitle = computed(() => {
   );
   return activeSession?.title || "Agent Chat";
 });
+
+const roleLabelMap: Record<"primary" | "planner" | "worker", string> = {
+  primary: "Primary",
+  planner: "Planner",
+  worker: "Worker",
+};
 
 /**
  * 重設成新對話的預設畫面。
@@ -336,12 +360,76 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
   const id = `${event.type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   switch (event.type) {
+    case "orchestration_assessed":
+      return {
+        id,
+        type: event.type,
+        title: `Gate 評估：${event.assessment.shouldOrchestrate ? "進入 multi-agent" : "維持 single agent"}`,
+        detail: [
+          `score: ${event.assessment.score}`,
+          `strategy: ${event.assessment.strategy}`,
+          `confidence: ${event.assessment.confidence}`,
+          `source: ${event.assessment.source}`,
+          `signals: connector=${event.assessment.signals.connectorCount}, intent=${event.assessment.signals.intentCount}, length=${event.assessment.signals.messageLength}`,
+          `reasons: ${event.assessment.reasons.join(" / ")}`,
+        ].join("\n"),
+        status: event.assessment.shouldOrchestrate ? "success" : "info",
+      };
+    case "orchestration_started":
+      return {
+        id,
+        type: event.type,
+        title: `啟動 multi-agent orchestration`,
+        detail: [
+          `來源：${event.source}`,
+          `子任務數量：${event.taskCount}`,
+          `原因：${event.reason}`,
+          "Tasks:",
+          ...event.tasks.map(
+            (task, index) =>
+              `${index + 1}. [${roleLabelMap[task.role]}] ${task.title} (${task.taskId})\n${task.instruction}`,
+          ),
+        ].join("\n"),
+        status: "info",
+      };
+    case "subtask_started":
+      return {
+        id,
+        type: event.type,
+        title: `${roleLabelMap[event.role]} 開始子任務：${event.title}`,
+        detail: `taskId: ${event.taskId}`,
+        status: "info",
+      };
+    case "subtask_completed":
+      return {
+        id,
+        type: event.type,
+        title: `${roleLabelMap[event.role]} 完成子任務：${event.title}`,
+        detail: `taskId: ${event.taskId}\n${event.output}`,
+        status: "success",
+      };
+    case "subtask_failed":
+      return {
+        id,
+        type: event.type,
+        title: `${roleLabelMap[event.role]} 子任務失敗：${event.title}`,
+        detail: `taskId: ${event.taskId}\n${event.error}`,
+        status: "error",
+      };
+    case "orchestration_completed":
+      return {
+        id,
+        type: event.type,
+        title: "multi-agent orchestration 完成",
+        detail: `完成 ${event.completedTaskCount} / ${event.taskCount} 個子任務`,
+        status: "success",
+      };
     case "session_started":
       return {
         id,
         type: event.type,
         title: `Session 已綁定：${event.sessionId}`,
-        detail: `skill: ${event.skillName}\n歷史訊息數量：${event.historyMessageCount}`,
+        detail: `role: ${roleLabelMap[event.roleName]}\nskill: ${event.skillName}\n歷史訊息數量：${event.historyMessageCount}`,
         status: "info",
       };
     case "skill_selected":
@@ -356,7 +444,7 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
       return {
         id,
         type: event.type,
-        title: `第 ${event.attempt} 輪：正在向模型請求決策`,
+        title: `${roleLabelMap[event.roleName]} 第 ${event.attempt} 輪：正在向模型請求決策`,
         detail: `messageCount: ${event.messageCount}`,
         status: "info",
       };
@@ -366,8 +454,8 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
         type: event.type,
         title:
           event.decision.type === "final"
-            ? `第 ${event.attempt} 輪：模型決定直接回答`
-            : `第 ${event.attempt} 輪：模型決定使用工具 ${event.decision.toolName}`,
+            ? `${roleLabelMap[event.roleName]} 第 ${event.attempt} 輪：模型決定直接回答`
+            : `${roleLabelMap[event.roleName]} 第 ${event.attempt} 輪：模型決定使用工具 ${event.decision.toolName}`,
         detail:
           event.decision.type === "final"
             ? event.decision.answer
@@ -378,7 +466,7 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
       return {
         id,
         type: event.type,
-        title: `第 ${event.attempt} 輪：模型回傳了不合法的工具決策`,
+        title: `${roleLabelMap[event.roleName]} 第 ${event.attempt} 輪：模型回傳了不合法的工具決策`,
         detail: `可用工具：${event.availableToolNames.join(", ")}`,
         status: "error",
       };
@@ -386,7 +474,7 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
       return {
         id,
         type: event.type,
-        title: `第 ${event.attempt} 輪：開始執行 ${event.toolName}`,
+        title: `${roleLabelMap[event.roleName]} 第 ${event.attempt} 輪：開始執行 ${event.toolName}`,
         detail: JSON.stringify(event.toolInput, null, 2),
         status: "info",
       };
@@ -394,7 +482,7 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
       return {
         id,
         type: event.type,
-        title: `第 ${event.attempt} 輪：${event.toolName} ${event.result.ok ? "執行成功" : "執行失敗"}`,
+        title: `${roleLabelMap[event.roleName]} 第 ${event.attempt} 輪：${event.toolName} ${event.result.ok ? "執行成功" : "執行失敗"}`,
         detail: `duration: ${event.result.meta.durationMs} ms\nattempts: ${event.result.meta.attempts}${
           event.result.error ? `\nerror: ${event.result.error.message}` : ""
         }`,
@@ -404,9 +492,9 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
       return {
         id,
         type: event.type,
-        title: `第 ${event.attempt} 輪：產生最終答案`,
+        title: `${roleLabelMap[event.roleName]} 第 ${event.attempt} 輪：產生最終答案`,
         detail: event.answer,
-        status: "success",
+        status: event.roleName === "primary" ? "success" : "info",
       };
     case "done":
       return {
@@ -533,7 +621,7 @@ const sendMessage = async () => {
             localStorage.setItem(sessionStorageKey, event.sessionId);
           }
 
-          if (event.type === "final_answer") {
+          if (event.type === "final_answer" && event.roleName === "primary") {
             finalAnswer = event.answer;
             didReceiveFinalAnswer = true;
           }
