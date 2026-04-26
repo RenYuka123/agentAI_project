@@ -1,4 +1,5 @@
 import { appConfig } from "../../../config/env.js";
+import { throwIfAborted } from "../../../utils/abort.js";
 import { logger } from "../../../utils/logger.js";
 import { getAgentRoleByName } from "../../agents/index.js";
 import { llmService } from "../../llm/index.js";
@@ -108,7 +109,15 @@ const createToolContext = (
  * @returns 最終答案與本輪新增訊息。
  */
 export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLoopResult> => {
-  const { disableTools = false, onEvent, userMessage, historyMessages = [], roleName = "primary", skillName } = input;
+  const {
+    disableTools = false,
+    onEvent,
+    userMessage,
+    historyMessages = [],
+    roleName = "primary",
+    signal,
+    skillName,
+  } = input;
   const roleConfig = getAgentRoleByName(roleName);
   const tools = disableTools ? [] : getToolList(skillName, roleName);
   const maxLoops = roleConfig?.maxLoops ?? appConfig.maxAgentLoops;
@@ -161,6 +170,8 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
    * 3. 若是 tool_call 就執行工具並把結果回灌
    */
   for (let attempt = 0; attempt < maxLoops; attempt += 1) {
+    // 在進入每一輪模型決策前先檢查取消狀態，避免 client 斷線後仍持續消耗資源。
+    throwIfAborted(signal, "Agent loop aborted before requesting decision.");
     logger.info("Agent loop requesting decision", {
       attempt: attempt + 1,
       messageCount: messages.length,
@@ -175,7 +186,7 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
       onEvent,
     );
 
-    const decision: AgentDecision = await llmService.askAgentDecision(messages);
+    const decision: AgentDecision = await llmService.askAgentDecision(messages, signal);
     logger.info("Agent loop received decision", decision);
     await emitAgentEvent(
       {
@@ -287,7 +298,9 @@ export const runAgentLoop = async (input: RunAgentLoopInput): Promise<RunAgentLo
       },
       onEvent,
     );
-    const toolResult = await executeTool(tool, decision.toolInput);
+    const toolResult = await executeTool(tool, decision.toolInput, {
+      signal,
+    });
     logger.info("Agent loop received tool result", {
       toolName: decision.toolName,
       ok: toolResult.ok,

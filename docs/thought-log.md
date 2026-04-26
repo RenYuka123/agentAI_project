@@ -138,6 +138,137 @@ Agent 從單一 loop 演進到 multi-agent v1 / v1.1
 
 ---
 
+## 2026-04-26
+
+### 主題
+
+Orchestration gate v1.5 / v2、task dependency MVP 與目前架構整理
+
+### 當下想法
+
+- orchestration gate 不能只看「像不像多步驟」，也要看 task 之間是否值得拆
+- planner 已經能拆 task 了，下一步至少要讓 task 之間有 `dependsOn`
+- 不想一口氣做成完整 DAG engine，先把 dependency-aware sequential orchestration 做穩
+- frontend timeline 已經是很重要的觀測介面，文件也需要同步更新，不然之後會失真
+
+### 已做決策
+
+- orchestration gate 採 hybrid 方式：
+  - 高低分案例直接用 rule-based assessment
+  - 模糊區交給 LLM router
+- gate signals 新增 dependency-aware heuristic：
+  - `dependencyCueCount`
+  - `parallelCueCount`
+  - `estimatedTaskCount`
+  - `estimatedDependencyDepth`
+  - `isDependencyChainLikely`
+- `PlannedTask` 新增 `dependsOn`
+- orchestrator 先支援：
+  - dependency 驗證
+  - 拓樸排序
+  - 只注入依賴結果
+  - 前置失敗時 block 後續 task
+- 若 planner 回了壞掉或循環 dependency，流程自動降級成原本的線性順序
+- 目前不先做：
+  - parallel execution
+  - artifact / shared state
+  - 完整 workflow engine
+
+### 原因
+
+- 直接把 planner / orchestrator / gate 一次做太重，會讓系統難 debug
+- `dependsOn` 已經足夠表達目前最需要的任務順序
+- gate 若能分辨 dependency chain 與較鬆耦合的多任務，決策會比只看 connector 更準
+- 先保留文字型 worker output，能降低改動成本，讓我們先把流程控制做好
+- timeline 與文件同步更新，才能支撐後續架構討論
+
+### 目前理解
+
+- 現在系統可以分成 4 層：
+  - Agent 基礎執行層
+  - Session / API 應用層
+  - Orchestration 協調層
+  - Frontend 可觀測層
+- orchestration 目前仍偏可控 pipeline，不是完整 workflow engine
+- `skill` 是場景、`role` 是分工、`tool` 是能力、`orchestration` 是流程編排
+- `dependsOn` 已經進入 execution model，也開始影響 gate scoring
+
+### 待確認事項
+
+- gate 是否要在未來更正式地吃 planner 產出的 task model，而不是只用 heuristic
+- worker 之間的中間結果是否要升級成 artifact / structured context
+- synthesizer 是否要更明確引用 dependency outputs，而不只是吃 taskResults 文字
+- 未來是否要支援部分平行執行，而不只是 dependency-aware sequential
+
+### 下一步候選
+
+1. 校正 gate scoring 對實際 prompt 的命中率
+2. 討論 synthesizer 如何更明確利用 dependency outputs
+3. 設計 worker artifact / shared context 的最小版本
+4. 討論 orchestration 何時從 pipeline 升級成 workflow engine
+
+---
+
+## 2026-04-26
+
+### 主題
+
+Backend review 後的可靠性補強、語意收斂與自動化測試基線
+
+### 當下想法
+
+- 第一輪 code review 抓到的問題，多數不是架構方向錯，而是 request lifecycle control 還不夠硬
+- 若不把 cancellation、planner contract、session semantics 補齊，後面再談 orchestration 品質會一直被基礎問題干擾
+- 今天做完修復後，文件也必須同步，不然下次只看 docs 會跟不上目前真實狀態
+
+### 已做決策
+
+- controller 端新增 request-scoped abort，並把 `AbortSignal` 傳到：
+  - `agent.service`
+  - `agent.loop`
+  - `orchestrator`
+  - `result-synthesizer`
+  - `llm.service / provider`
+  - `tool executor / fetch 型工具`
+- planner role prompt 正式納入 `dependsOn`，不再讓 system prompt 與 user prompt schema 打架
+- invalid dependency plan 不再靜默清掉 dependency，而是改建 fallback task plan
+- `ensureSession` 改成 `upsert` 風格，避免同 session 併發建立 race
+- 讀取 / 刪除不存在 session 時，API 改回 `404`
+- skill carry-over 不再因 `calculator` 歷史單獨誤判成 `investment_analysis`
+- single-player draw fallback 改成 deterministic heuristic
+- draw multiplayer room binding 改掛在 `socket.data.activeRoomId`
+- 補一套 backend smoke tests，並以 `tsc -> node` 的自訂 test runner 執行
+
+### 原因
+
+- SSE client disconnect 後若後端還繼續跑，會浪費 tokens、留下髒狀態，也讓 debug 很混亂
+- planner schema 若不一致，`dependsOn` 再怎麼設計都很難穩定產出
+- invalid dependency 不應被當成「沒有 dependency」，那會悄悄改變執行語意
+- session 不存在與空訊息是兩種不同狀態，API contract 應該清楚
+- deterministic heuristic 比 `Math.random()` 更適合測試、debug 與後續遊戲規則設計
+- 先有 smoke tests，這輪修掉的問題才比較不會很快回歸
+
+### 目前理解
+
+- orchestration 現在已經是 dependency-aware pipeline，不只是 task list
+- request cancellation 已經從 controller 接到外部依賴層
+- backend 的主要高優先 review issue 已修掉一輪
+- 自動化測試目前是輕量 baseline，不是完整 integration suite
+
+### 待確認事項
+
+- `deleteSession` 之後要不要再升級成 transaction 或更強的一致性策略
+- orchestration / tool executor 是否要補更完整的 integration tests
+- draw multiplayer 是否還需要更完整的 state-machine 化整理
+
+### 下一步候選
+
+1. 補 orchestration integration tests
+2. 補更多 draw multiplayer 狀態流測試
+3. 討論 tool health check / startup validation 是否要升級成真正防線
+
+---
+
 ## 紀錄模板
 
 ```md

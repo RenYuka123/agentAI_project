@@ -1,3 +1,4 @@
+import { throwIfAborted } from "../../../utils/abort.js";
 import { runAgentLoop } from "../../agent/index.js";
 import { llmService } from "../../llm/index.js";
 import { safeJsonParse } from "../../../utils/safe-json.js";
@@ -11,6 +12,8 @@ import type {
 } from "./orchestrator.types.js";
 
 const connectorPattern = /(先|再|然後|並且|同時|接著|之後|最後|順便)/g;
+const dependencyCuePattern = /(先|再|然後|接著|之後|最後|順便)/g;
+const parallelCuePattern = /(並且|同時|以及|與|和)/g;
 const followUpPattern = /(順便|另外|也|再|接著|然後|補充)/;
 
 /**
@@ -23,10 +26,40 @@ const countMatches = (message: string, pattern: RegExp): number => {
   return matches ? matches.length : 0;
 };
 
+/**
+ * 在 gate 階段先粗略估計這個需求的 dependsOn 形狀。
+ *
+ * 這不是正式 task plan，只是用語句中的依序 / 並列 cue
+ * 估計它比較像線性 dependency chain，還是較值得拆分的多任務需求。
+ */
+const estimateDependencyShape = (normalizedMessage: string, intentCount: number) => {
+  const dependencyCueCount = countMatches(normalizedMessage, dependencyCuePattern);
+  const parallelCueCount = countMatches(normalizedMessage, parallelCuePattern);
+  const estimatedTaskCount = Math.max(
+    1,
+    Math.min(3, Math.max(intentCount, dependencyCueCount + parallelCueCount + 1)),
+  );
+  const estimatedDependencyDepth = Math.max(
+    1,
+    Math.min(3, dependencyCueCount + (parallelCueCount > 0 ? 1 : 0) + 1),
+  );
+  const isDependencyChainLikely =
+    dependencyCueCount >= Math.max(1, parallelCueCount) && estimatedDependencyDepth >= 2;
+
+  return {
+    dependencyCueCount,
+    parallelCueCount,
+    estimatedTaskCount,
+    estimatedDependencyDepth,
+    isDependencyChainLikely,
+  };
+};
+
 const createRuleBasedAssessment = (context: OrchestrationContext): OrchestrationAssessment => {
   const normalizedMessage = context.userMessage.replace(/\s+/g, "");
   const connectorCount = countMatches(normalizedMessage, connectorPattern);
   const intentCount = intentKeywords.filter((keyword) => normalizedMessage.includes(keyword)).length;
+  const dependencyShape = estimateDependencyShape(normalizedMessage, intentCount);
   const hasExplicitMultiStepCue = connectorCount > 0;
   const hasFollowUpLanguage = followUpPattern.test(normalizedMessage);
   let score = 0;
@@ -51,9 +84,28 @@ const createRuleBasedAssessment = (context: OrchestrationContext): Orchestration
     reasons.push("目前只命中單一主要任務意圖。");
   }
 
+  if (dependencyShape.estimatedTaskCount >= 2 && !dependencyShape.isDependencyChainLikely) {
+    score += 1;
+    reasons.push(`預估可拆成 ${dependencyShape.estimatedTaskCount} 段任務。`);
+  } else if (dependencyShape.estimatedTaskCount >= 2) {
+    reasons.push(`雖然預估有 ${dependencyShape.estimatedTaskCount} 段任務，但它們看起來偏向線性依賴。`);
+  }
+
   if (hasFollowUpLanguage) {
     score += 1;
     reasons.push("訊息帶有延續或補充語氣。");
+  }
+
+  if (dependencyShape.parallelCueCount > 0) {
+    score += 1;
+    reasons.push(`命中 ${dependencyShape.parallelCueCount} 個並列 cue，拆分處理的收益較高。`);
+  }
+
+  if (dependencyShape.isDependencyChainLikely) {
+    score -= dependencyShape.parallelCueCount > 0 ? 1 : 2;
+    reasons.push(
+      `依賴 cue 偏強，預估 dependency 深度約 ${dependencyShape.estimatedDependencyDepth}，較像線性串接流程。`,
+    );
   }
 
   if (context.skillName && context.skillName !== "default") {
@@ -74,7 +126,12 @@ const createRuleBasedAssessment = (context: OrchestrationContext): Orchestration
     signals: {
       messageLength: normalizedMessage.length,
       connectorCount,
+      dependencyCueCount: dependencyShape.dependencyCueCount,
+      parallelCueCount: dependencyShape.parallelCueCount,
       intentCount,
+      estimatedTaskCount: dependencyShape.estimatedTaskCount,
+      estimatedDependencyDepth: dependencyShape.estimatedDependencyDepth,
+      isDependencyChainLikely: dependencyShape.isDependencyChainLikely,
       hasExplicitMultiStepCue,
       hasFollowUpLanguage,
       matchedSkillName: context.skillName,
@@ -107,8 +164,10 @@ const buildRouterMessages = (context: OrchestrationContext, ruleAssessment: Orch
       "You are an orchestration router.",
       "Decide whether the user request should stay in a single agent flow or be upgraded to sequential multi-agent orchestration.",
       "Return valid JSON only with this shape:",
-      '{"shouldOrchestrate":true,"score":0,"strategy":"sequential_multi_agent","confidence":"medium","source":"hybrid_llm","reasons":["..."],"signals":{"messageLength":0,"connectorCount":0,"intentCount":0,"hasExplicitMultiStepCue":false,"hasFollowUpLanguage":false,"matchedSkillName":"optional"}}',
+      '{"shouldOrchestrate":true,"score":0,"strategy":"sequential_multi_agent","confidence":"medium","source":"hybrid_llm","reasons":["..."],"signals":{"messageLength":0,"connectorCount":0,"dependencyCueCount":0,"parallelCueCount":0,"intentCount":0,"estimatedTaskCount":0,"estimatedDependencyDepth":0,"isDependencyChainLikely":false,"hasExplicitMultiStepCue":false,"hasFollowUpLanguage":false,"matchedSkillName":"optional"}}',
       "Keep the original numeric signals unchanged.",
+      "If dependency cues suggest a mostly linear chain, be more conservative about orchestration cost.",
+      "If there are multiple likely tasks with weaker coupling or parallel cues, orchestration becomes more worthwhile.",
       "You may revise shouldOrchestrate, score, strategy, confidence, and reasons based on semantic judgment.",
     ].join("\n\n"),
   },
@@ -131,7 +190,9 @@ const buildRouterMessages = (context: OrchestrationContext, ruleAssessment: Orch
  */
 export const assessOrchestration = async (input: {
   context: OrchestrationContext;
+  signal?: AbortSignal;
 }): Promise<OrchestrationAssessment> => {
+  const { signal } = input;
   const ruleAssessment = createRuleBasedAssessment(input.context);
   const { score } = ruleAssessment;
 
@@ -144,6 +205,7 @@ export const assessOrchestration = async (input: {
       messages: buildRouterMessages(input.context, ruleAssessment),
       validate: isOrchestrationAssessment,
       fallback: () => ruleAssessment,
+      signal,
     });
 
     return {
@@ -168,11 +230,13 @@ const buildTask = (
   taskId: string,
   title: string,
   instruction: string,
+  dependsOn: string[] = [],
 ): PlannedTask => ({
   taskId,
   title,
   instruction,
   role: "worker",
+  dependsOn,
 });
 
 /**
@@ -200,6 +264,8 @@ const isPlannedTask = (value: unknown): value is PlannedTask => {
     typeof candidate.taskId === "string" &&
     typeof candidate.title === "string" &&
     typeof candidate.instruction === "string" &&
+    (candidate.dependsOn === undefined ||
+      (Array.isArray(candidate.dependsOn) && candidate.dependsOn.every((dependency) => typeof dependency === "string"))) &&
     candidate.role === "worker"
   );
 };
@@ -210,7 +276,7 @@ const isPlannedTask = (value: unknown): value is PlannedTask => {
  * 這裡會限制最多 3 個任務、標準化 taskId，並濾掉不完整的 task，
  * 避免不穩定的模型輸出直接污染 orchestration 主流程。
  */
-const sanitizeTaskPlan = (value: unknown): TaskPlan | undefined => {
+export const sanitizeTaskPlan = (value: unknown): TaskPlan | undefined => {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -220,15 +286,43 @@ const sanitizeTaskPlan = (value: unknown): TaskPlan | undefined => {
     return undefined;
   }
 
-  const tasks = candidate.tasks
-    .filter(isPlannedTask)
-    .slice(0, 3)
-    .map((task, index) => ({
-      taskId: normalizeTaskId(task.taskId, index),
-      title: task.title.trim() || `子任務 ${index + 1}`,
-      instruction: task.instruction.trim(),
-      role: "worker" as const,
-    }))
+  const rawTasks = candidate.tasks.filter(isPlannedTask).slice(0, 3);
+  const normalizedTaskIds = rawTasks.map((task, index) => normalizeTaskId(task.taskId, index));
+  const validTaskIds = new Set(normalizedTaskIds);
+
+  // 只要 planner 產出的 dependency 參考了未知 taskId，就視為整份 task plan 不可靠。
+  const hasInvalidDependencyReference = rawTasks.some((task, index) => {
+    const taskId = normalizedTaskIds[index];
+
+    return (task.dependsOn ?? []).some((dependency, dependencyIndex) => {
+      const normalizedDependency = normalizeTaskId(dependency, dependencyIndex);
+      return normalizedDependency === taskId || !validTaskIds.has(normalizedDependency);
+    });
+  });
+
+  if (hasInvalidDependencyReference) {
+    return undefined;
+  }
+
+  const tasks = rawTasks
+    .map((task, index) => {
+      const taskId = normalizedTaskIds[index];
+      const dependsOn = Array.from(
+        new Set(
+          (task.dependsOn ?? [])
+            .map((dependency, dependencyIndex) => normalizeTaskId(dependency, dependencyIndex))
+            .filter((dependency) => dependency !== taskId && validTaskIds.has(dependency)),
+        ),
+      );
+
+      return {
+        taskId,
+        title: task.title.trim() || `子任務 ${index + 1}`,
+        instruction: task.instruction.trim(),
+        role: "worker" as const,
+        dependsOn,
+      };
+    })
     .filter((task) => task.instruction.length > 0);
 
   if (!tasks.length) {
@@ -248,7 +342,7 @@ const sanitizeTaskPlan = (value: unknown): TaskPlan | undefined => {
  * 當 planner role 無法穩定產生合法 task plan 時，仍能依 skill 與訊息內容
  * 產出最低可用的多步驟拆解結果，確保 orchestration 可以繼續進行。
  */
-const createFallbackTaskPlan = (context: OrchestrationContext): TaskPlan => {
+export const createFallbackTaskPlan = (context: OrchestrationContext): TaskPlan => {
   const { skillName, userMessage } = context;
   const tasks: PlannedTask[] = [];
   const normalizedMessage = userMessage.trim();
@@ -266,6 +360,7 @@ const createFallbackTaskPlan = (context: OrchestrationContext): TaskPlan => {
         "summarize-analysis",
         "整理投資分析",
         `根據前一個子任務的資料，整理成簡潔的投資分析重點。如果缺乏資料，就明確指出限制。原始需求：${normalizedMessage}`,
+        ["collect-data"],
       ),
     );
   } else if (skillName === "weather_summary") {
@@ -281,6 +376,7 @@ const createFallbackTaskPlan = (context: OrchestrationContext): TaskPlan => {
         "summarize-weather",
         "整理天氣建議",
         `根據前一個子任務的天氣結果，整理成自然語言摘要與生活提醒。原始需求：${normalizedMessage}`,
+        ["collect-weather"],
       ),
     );
   } else {
@@ -296,6 +392,7 @@ const createFallbackTaskPlan = (context: OrchestrationContext): TaskPlan => {
         "compose-answer",
         "整理後半段需求",
         `根據前一個子任務結果，繼續完成剩餘需求並補上整體整理。原始需求：${normalizedMessage}`,
+        ["analyze-request"],
       ),
     );
   }
@@ -314,6 +411,9 @@ const buildPlannerPrompt = (context: OrchestrationContext): string =>
   [
     "Please create a task plan for this user request.",
     "The final answer must be a JSON object string matching the required task plan shape.",
+    'Each task must follow this shape: {"taskId":"...","title":"...","instruction":"...","role":"worker","dependsOn":["optional-task-id"]}.',
+    "Use dependsOn to express task dependencies. Use an empty array when a task has no prerequisite.",
+    "Only reference taskIds that exist in the same task plan.",
     `User request: ${context.userMessage}`,
     `Skill: ${context.skillName || "default"}`,
   ].join("\n\n");
@@ -325,8 +425,10 @@ export const createTaskPlan = async (input: {
   context: OrchestrationContext;
   historyMessages?: AgentMessage[];
   onEvent?: AgentStreamEventHandler;
+  signal?: AbortSignal;
 }): Promise<TaskPlan> => {
-  const { context, historyMessages = [], onEvent } = input;
+  const { context, historyMessages = [], onEvent, signal } = input;
+  throwIfAborted(signal, "Task planning aborted before planner execution.");
 
   /**
    * 先嘗試由 planner role 產出 task plan。
@@ -339,6 +441,7 @@ export const createTaskPlan = async (input: {
       roleName: "planner",
       disableTools: true,
       onEvent,
+      signal,
     });
     const parsed = safeJsonParse(plannerResult.answer);
     const taskPlan = parsed.ok ? sanitizeTaskPlan(parsed.data) : undefined;

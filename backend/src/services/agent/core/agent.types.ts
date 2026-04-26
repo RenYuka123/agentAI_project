@@ -73,6 +73,8 @@ export interface RunAgentLoopInput {
   disableTools?: boolean;
   /** 流式模式下的事件回呼。 */
   onEvent?: AgentStreamEventHandler;
+  /** 用來中止本輪流程的 signal。 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -126,6 +128,7 @@ export type AgentStreamEvent =
         title: string;
         instruction: string;
         role: AgentRoleName;
+        dependsOn?: string[];
       }>;
     }
   | {
@@ -139,6 +142,8 @@ export type AgentStreamEvent =
       title: string;
       /** 執行角色。 */
       role: AgentRoleName;
+      /** 依賴的前置任務。 */
+      dependsOn?: string[];
     }
   | {
       /** 表示某個子任務執行完成。 */
@@ -151,6 +156,8 @@ export type AgentStreamEvent =
       title: string;
       /** 執行角色。 */
       role: AgentRoleName;
+      /** 依賴的前置任務。 */
+      dependsOn?: string[];
       /** 子任務輸出。 */
       output: string;
     }
@@ -165,6 +172,8 @@ export type AgentStreamEvent =
       title: string;
       /** 執行角色。 */
       role: AgentRoleName;
+      /** 依賴的前置任務。 */
+      dependsOn?: string[];
       /** 錯誤內容。 */
       error: string;
     }

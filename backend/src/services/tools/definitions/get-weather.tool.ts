@@ -180,7 +180,10 @@ const getWeatherCodeDescription = (weatherCode?: number): string => {
  * @param input 工具輸入資料。
  * @returns 第一筆最匹配的地點資料。
  */
-const geocodeLocation = async (input: GetWeatherToolInput): Promise<OpenMeteoGeocodingResult> => {
+const geocodeLocation = async (
+  input: GetWeatherToolInput,
+  signal?: AbortSignal,
+): Promise<OpenMeteoGeocodingResult> => {
   const normalizedLocation = normalizeWeatherLocation(input.location, input.countryCode);
   const url = new URL(appConfig.weatherGeocodingApiUrl);
   url.searchParams.set("name", normalizedLocation.location);
@@ -194,6 +197,7 @@ const geocodeLocation = async (input: GetWeatherToolInput): Promise<OpenMeteoGeo
 
   const response = await fetch(url, {
     method: "GET",
+    signal,
   });
 
   if (!response.ok) {
@@ -234,6 +238,7 @@ const geocodeLocation = async (input: GetWeatherToolInput): Promise<OpenMeteoGeo
  */
 const fetchWeatherForecast = async (
   location: OpenMeteoGeocodingResult,
+  signal?: AbortSignal,
 ): Promise<OpenMeteoForecastResponse> => {
   const url = new URL(appConfig.weatherApiUrl);
   url.searchParams.set("latitude", String(location.latitude));
@@ -257,6 +262,7 @@ const fetchWeatherForecast = async (
 
   const response = await fetch(url, {
     method: "GET",
+    signal,
   });
 
     if (!response.ok) {
@@ -347,9 +353,9 @@ export const getWeatherTool: AgentTool<GetWeatherToolInput, JsonObject> = {
       language,
     };
   },
-  execute: async (input) => {
-    const location = await geocodeLocation(input);
-    const forecast = await fetchWeatherForecast(location);
+  execute: async (input, context) => {
+    const location = await geocodeLocation(input, context?.signal);
+    const forecast = await fetchWeatherForecast(location, context?.signal);
     const current = forecast.current;
 
     if (!current) {

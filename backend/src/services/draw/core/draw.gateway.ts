@@ -43,16 +43,58 @@ type GuessPayload = {
   message?: string;
 };
 
-const roomStore = new Map<string, string>();
-
-const rememberRoom = (socketId: string, roomId: string): void => {
-  roomStore.set(socketId, roomId);
+type DrawSocket = Socket & {
+  data: Socket["data"] & {
+    activeRoomId?: string;
+  };
 };
 
-const forgetRoom = (socketId: string): string | undefined => {
-  const roomId = roomStore.get(socketId);
-  roomStore.delete(socketId);
-  return roomId;
+/**
+ * 將目前 socket 綁定到指定房間，供 disconnect 與事件驗證共用。
+ *
+ * @param socket 目前連線的 socket。
+ * @param roomId 已確認加入的房間。
+ */
+export const bindSocketRoom = (socket: DrawSocket, roomId: string): void => {
+  socket.data.activeRoomId = roomId;
+};
+
+/**
+ * 清除 socket 綁定的房間資訊，避免 disconnect 時誤判舊房間。
+ *
+ * @param socket 目前連線的 socket。
+ * @returns 原本綁定的房間 id。
+ */
+export const clearSocketRoom = (socket: DrawSocket): string | undefined => {
+  const { activeRoomId } = socket.data;
+  delete socket.data.activeRoomId;
+  return activeRoomId;
+};
+
+/**
+ * 驗證事件 payload 的 roomId 是否與目前 socket 綁定的房間一致。
+ *
+ * @param socket 目前連線的 socket。
+ * @param roomId 事件帶入的房間 id。
+ * @returns 通過驗證時回傳可用的房間 id，否則回傳 undefined。
+ */
+export const resolveSocketRoomId = (socket: DrawSocket, roomId?: string): string | undefined => {
+  const normalizedRoomId = roomId?.trim();
+
+  if (!normalizedRoomId) {
+    return undefined;
+  }
+
+  if (socket.data.activeRoomId && socket.data.activeRoomId !== normalizedRoomId) {
+    logger.warn("Draw event used a roomId different from the socket binding", {
+      socketId: socket.id,
+      activeRoomId: socket.data.activeRoomId,
+      payloadRoomId: normalizedRoomId,
+    });
+    return undefined;
+  }
+
+  return normalizedRoomId;
 };
 
 const createUniqueRoomId = (): string => {
@@ -159,8 +201,8 @@ const nextTurn = (io: Server, roomId: string): void => {
   io.to(drawer.id).emit("wordChoices", { words: room.wordChoices });
 };
 
-const handleDisconnect = (io: Server, socketId: string): void => {
-  const roomId = forgetRoom(socketId);
+const handleDisconnect = (io: Server, socket: DrawSocket): void => {
+  const roomId = clearSocketRoom(socket);
   if (!roomId) {
     return;
   }
@@ -171,35 +213,26 @@ const handleDisconnect = (io: Server, socketId: string): void => {
   }
 
   const drawer = getCurrentDrawer(room);
-  const updatedRoom = removePlayer(roomId, socketId);
+  const updatedRoom = removePlayer(roomId, socket.id);
 
   if (!updatedRoom || updatedRoom.players.length === 0) {
     deleteRoom(roomId);
     return;
   }
 
-  if (drawer?.id === socketId && updatedRoom.phase !== "lobby" && updatedRoom.phase !== "gameEnd") {
+  if (drawer?.id === socket.id && updatedRoom.phase !== "lobby" && updatedRoom.phase !== "gameEnd") {
     updatedRoom.phase = "roundEnd";
     endTurn(io, roomId);
   }
 
   io.to(roomId).emit("playerLeft", {
-    playerId: socketId,
+    playerId: socket.id,
     room: safeRoom(updatedRoom),
   });
 };
 
 const registerConnection = (io: Server, socket: Socket): void => {
-  socket.onAny((_event: string, payload: unknown) => {
-    if (
-      payload &&
-      typeof payload === "object" &&
-      "roomId" in payload &&
-      typeof payload.roomId === "string"
-    ) {
-      rememberRoom(socket.id, payload.roomId);
-    }
-  });
+  const drawSocket = socket as DrawSocket;
 
   socket.on("createRoom", (payload: CreateRoomPayload, callback?: ClientCallback<unknown>) => {
     const playerName = payload.playerName?.trim();
@@ -212,7 +245,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
     const roomId = createUniqueRoomId();
     const room = createRoom(roomId, socket.id, playerName);
 
-    rememberRoom(socket.id, roomId);
+    bindSocketRoom(drawSocket, roomId);
     socket.join(roomId);
     callback?.({ roomId, room: safeRoom(room) });
   });
@@ -232,7 +265,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
       return;
     }
 
-    rememberRoom(socket.id, roomId);
+    bindSocketRoom(drawSocket, roomId);
     socket.join(roomId);
     socket.to(roomId).emit("playerJoined", {
       player: { id: socket.id, name: playerName, score: 0 },
@@ -242,7 +275,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
   });
 
   socket.on("startGame", (payload: RoomPayload, callback?: ClientCallback<unknown>) => {
-    const roomId = payload.roomId?.trim();
+    const roomId = resolveSocketRoomId(drawSocket, payload.roomId);
     if (!roomId) {
       callback?.({ error: "roomId is required" });
       return;
@@ -275,7 +308,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
   });
 
   socket.on("pickWord", (payload: PickWordPayload) => {
-    const roomId = payload.roomId?.trim();
+    const roomId = resolveSocketRoomId(drawSocket, payload.roomId);
     const word = payload.word?.trim();
 
     if (!roomId || !word) {
@@ -312,7 +345,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
   });
 
   socket.on("draw", (payload: DrawPayload) => {
-    const roomId = payload.roomId?.trim();
+    const roomId = resolveSocketRoomId(drawSocket, payload.roomId);
     if (!roomId) {
       return;
     }
@@ -321,7 +354,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
   });
 
   socket.on("clearCanvas", (payload: RoomPayload) => {
-    const roomId = payload.roomId?.trim();
+    const roomId = resolveSocketRoomId(drawSocket, payload.roomId);
     if (!roomId) {
       return;
     }
@@ -330,7 +363,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
   });
 
   socket.on("guess", (payload: GuessPayload) => {
-    const roomId = payload.roomId?.trim();
+    const roomId = resolveSocketRoomId(drawSocket, payload.roomId);
     const message = payload.message?.trim();
 
     if (!roomId || !message) {
@@ -404,7 +437,7 @@ const registerConnection = (io: Server, socket: Socket): void => {
 
   socket.on("disconnect", () => {
     logger.info(`Draw player disconnected: ${socket.id}`);
-    handleDisconnect(io, socket.id);
+    handleDisconnect(io, drawSocket);
   });
 };
 

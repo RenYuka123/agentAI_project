@@ -370,7 +370,7 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
           `strategy: ${event.assessment.strategy}`,
           `confidence: ${event.assessment.confidence}`,
           `source: ${event.assessment.source}`,
-          `signals: connector=${event.assessment.signals.connectorCount}, intent=${event.assessment.signals.intentCount}, length=${event.assessment.signals.messageLength}`,
+          `signals: connector=${event.assessment.signals.connectorCount}, dependencyCue=${event.assessment.signals.dependencyCueCount}, parallelCue=${event.assessment.signals.parallelCueCount}, intent=${event.assessment.signals.intentCount}, tasks=${event.assessment.signals.estimatedTaskCount}, depth=${event.assessment.signals.estimatedDependencyDepth}, length=${event.assessment.signals.messageLength}`,
           `reasons: ${event.assessment.reasons.join(" / ")}`,
         ].join("\n"),
         status: event.assessment.shouldOrchestrate ? "success" : "info",
@@ -387,7 +387,9 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
           "Tasks:",
           ...event.tasks.map(
             (task, index) =>
-              `${index + 1}. [${roleLabelMap[task.role]}] ${task.title} (${task.taskId})\n${task.instruction}`,
+              `${index + 1}. [${roleLabelMap[task.role]}] ${task.title} (${task.taskId})${
+                task.dependsOn?.length ? `\ndependsOn: ${task.dependsOn.join(", ")}` : ""
+              }\n${task.instruction}`,
           ),
         ].join("\n"),
         status: "info",
@@ -397,7 +399,9 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
         id,
         type: event.type,
         title: `${roleLabelMap[event.role]} 開始子任務：${event.title}`,
-        detail: `taskId: ${event.taskId}`,
+        detail: `taskId: ${event.taskId}${
+          event.dependsOn?.length ? `\ndependsOn: ${event.dependsOn.join(", ")}` : ""
+        }`,
         status: "info",
       };
     case "subtask_completed":
@@ -405,7 +409,9 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
         id,
         type: event.type,
         title: `${roleLabelMap[event.role]} 完成子任務：${event.title}`,
-        detail: `taskId: ${event.taskId}\n${event.output}`,
+        detail: `taskId: ${event.taskId}${
+          event.dependsOn?.length ? `\ndependsOn: ${event.dependsOn.join(", ")}` : ""
+        }\n${event.output}`,
         status: "success",
       };
     case "subtask_failed":
@@ -413,7 +419,9 @@ const toTimelineEntry = (event: AgentStreamEvent): ChatTimelineEntry => {
         id,
         type: event.type,
         title: `${roleLabelMap[event.role]} 子任務失敗：${event.title}`,
-        detail: `taskId: ${event.taskId}\n${event.error}`,
+        detail: `taskId: ${event.taskId}${
+          event.dependsOn?.length ? `\ndependsOn: ${event.dependsOn.join(", ")}` : ""
+        }\n${event.error}`,
         status: "error",
       };
     case "orchestration_completed":

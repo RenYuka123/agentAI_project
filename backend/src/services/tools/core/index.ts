@@ -4,6 +4,7 @@ export type {
   AgentTool,
   AnyAgentTool,
   ToolCategory,
+  ToolExecutionContext,
   ToolExecutionError,
   ToolExecutionMeta,
   ToolExecutionResult,

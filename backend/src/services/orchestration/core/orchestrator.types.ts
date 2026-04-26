@@ -15,8 +15,18 @@ export interface OrchestrationAssessmentSignals {
   messageLength: number;
   /** 命中的多步驟連接詞數量。 */
   connectorCount: number;
+  /** 偏向依序執行的依賴提示數量。 */
+  dependencyCueCount: number;
+  /** 偏向可拆分處理的並列提示數量。 */
+  parallelCueCount: number;
   /** 命中的任務意圖數量。 */
   intentCount: number;
+  /** 估計的任務數量。 */
+  estimatedTaskCount: number;
+  /** 估計的依賴深度。 */
+  estimatedDependencyDepth: number;
+  /** 是否偏向線性依賴鏈。 */
+  isDependencyChainLikely: boolean;
   /** 是否命中明顯多步驟 cue。 */
   hasExplicitMultiStepCue: boolean;
   /** 是否看起來在延續先前步驟。 */
@@ -51,6 +61,8 @@ export interface PlannedTask {
   instruction: string;
   /** 負責此任務的角色。 */
   role: AgentRoleName;
+  /** 此任務依賴哪些前置任務。 */
+  dependsOn?: string[];
 }
 
 export interface TaskPlan {
@@ -82,6 +94,8 @@ export interface RunOrchestrationInput {
   historyMessages?: AgentMessage[];
   /** 流式事件回呼。 */
   onEvent?: AgentStreamEventHandler;
+  /** 用來中止本輪 orchestration 的 signal。 */
+  signal?: AbortSignal;
 }
 
 export interface RunOrchestrationResult {

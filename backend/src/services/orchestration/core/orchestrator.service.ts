@@ -1,8 +1,9 @@
+import { throwIfAborted } from "../../../utils/abort.js";
 import { logger } from "../../../utils/logger.js";
 import { runAgentLoop } from "../../agent/index.js";
 import type { AgentStreamEvent } from "../../agent/index.js";
 import type { PlannedTask, RunOrchestrationInput, RunOrchestrationResult, TaskResult } from "./orchestrator.types.js";
-import { createTaskPlan } from "./task-planner.js";
+import { createFallbackTaskPlan, createTaskPlan } from "./task-planner.js";
 import { synthesizeTaskResults } from "./result-synthesizer.js";
 
 /**
@@ -20,6 +21,82 @@ const emitEvent = async (
 };
 
 /**
+ * 檢查 task dependency 是否合法，並依賴關係產生穩定的執行順序。
+ */
+const resolveExecutionOrder = (tasks: PlannedTask[]): PlannedTask[] => {
+  const taskMap = new Map(tasks.map((task) => [task.taskId, task]));
+  const missingDependencies = tasks.flatMap((task) =>
+    (task.dependsOn ?? [])
+      .filter((dependencyId) => !taskMap.has(dependencyId))
+      .map((dependencyId) => `${task.taskId} -> ${dependencyId}`),
+  );
+
+  if (missingDependencies.length > 0) {
+    throw new Error(`Task plan contains unknown dependencies: ${missingDependencies.join(", ")}`);
+  }
+
+  const inDegree = new Map<string, number>();
+  const dependentMap = new Map<string, string[]>();
+
+  for (const task of tasks) {
+    const dependencies = task.dependsOn ?? [];
+    inDegree.set(task.taskId, dependencies.length);
+
+    for (const dependencyId of dependencies) {
+      const dependentTaskIds = dependentMap.get(dependencyId) ?? [];
+      dependentTaskIds.push(task.taskId);
+      dependentMap.set(dependencyId, dependentTaskIds);
+    }
+  }
+
+  const queue = tasks.filter((task) => (inDegree.get(task.taskId) ?? 0) === 0);
+  const orderedTasks: PlannedTask[] = [];
+
+  while (queue.length > 0) {
+    const currentTask = queue.shift();
+
+    if (!currentTask) {
+      continue;
+    }
+
+    orderedTasks.push(currentTask);
+
+    for (const dependentTaskId of dependentMap.get(currentTask.taskId) ?? []) {
+      const nextInDegree = (inDegree.get(dependentTaskId) ?? 0) - 1;
+      inDegree.set(dependentTaskId, nextInDegree);
+
+      if (nextInDegree === 0) {
+        const dependentTask = taskMap.get(dependentTaskId);
+        if (dependentTask) {
+          queue.push(dependentTask);
+        }
+      }
+    }
+  }
+
+  if (orderedTasks.length !== tasks.length) {
+    throw new Error("Task plan contains circular dependencies.");
+  }
+
+  return orderedTasks;
+};
+
+/**
+ * 根據 task dependency 取出本任務可用的前置結果。
+ */
+const getDependencyResults = (task: PlannedTask, taskResults: TaskResult[]): TaskResult[] => {
+  const dependencyIds = task.dependsOn ?? [];
+
+  if (!dependencyIds.length) {
+    return [];
+  }
+
+  return dependencyIds
+    .map((dependencyId) => taskResults.find((result) => result.taskId === dependencyId))
+    .filter((result): result is TaskResult => Boolean(result));
+};
+
+/**
  * 執行單一子任務。
  *
  * 每個子任務目前都交由對應 role 的 agent loop 處理，並將前面已完成的
@@ -28,10 +105,12 @@ const emitEvent = async (
 const executeTask = async (
   task: PlannedTask,
   input: RunOrchestrationInput,
-  previousResults: TaskResult[],
+  dependencyResults: TaskResult[],
 ): Promise<TaskResult> => {
-  const contextSummary = previousResults.length
-    ? `\n\nPrevious worker outputs:\n${previousResults
+  throwIfAborted(input.signal, `Subtask ${task.taskId} aborted before execution.`);
+
+  const contextSummary = dependencyResults.length
+    ? `\n\nDependency outputs:\n${dependencyResults
         .map((result, index) => `${index + 1}. ${result.title}: ${result.output}`)
         .join("\n")}`
     : "";
@@ -41,6 +120,7 @@ const executeTask = async (
     skillName: input.context.skillName,
     roleName: task.role,
     onEvent: input.onEvent,
+    signal: input.signal,
   });
 
   return {
@@ -69,6 +149,8 @@ export const orchestratorService = {
    * @returns 最終回覆、task plan 與子任務執行結果。
    */
   async run(input: RunOrchestrationInput): Promise<RunOrchestrationResult> {
+    throwIfAborted(input.signal, "Orchestration aborted before task planning.");
+
     /**
      * 先由 planner 或 fallback planner 產出本輪任務拆解結果。
      */
@@ -76,6 +158,7 @@ export const orchestratorService = {
       context: input.context,
       historyMessages: input.historyMessages,
       onEvent: input.onEvent,
+      signal: input.signal,
     });
     logger.info("Orchestrator created task plan", {
       sessionId: input.context.sessionId,
@@ -83,20 +166,39 @@ export const orchestratorService = {
       taskCount: taskPlan.tasks.length,
       reason: taskPlan.reason,
       source: taskPlan.source,
+      taskDependencies: taskPlan.tasks.map((task) => ({
+        taskId: task.taskId,
+        dependsOn: task.dependsOn ?? [],
+      })),
     });
+
+    let effectiveTaskPlan = taskPlan;
+    let orderedTasks = taskPlan.tasks;
+
+    try {
+      orderedTasks = resolveExecutionOrder(taskPlan.tasks);
+    } catch (error) {
+      logger.warn("Invalid task dependencies detected, rebuilding fallback task plan", {
+        sessionId: input.context.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      effectiveTaskPlan = createFallbackTaskPlan(input.context);
+      orderedTasks = effectiveTaskPlan.tasks;
+    }
 
     await emitEvent(
       {
         type: "orchestration_started",
         sessionId: input.context.sessionId,
-        taskCount: taskPlan.tasks.length,
-        reason: taskPlan.reason,
-        source: taskPlan.source,
-        tasks: taskPlan.tasks.map((task) => ({
+        taskCount: effectiveTaskPlan.tasks.length,
+        reason: effectiveTaskPlan.reason,
+        source: effectiveTaskPlan.source,
+        tasks: effectiveTaskPlan.tasks.map((task) => ({
           taskId: task.taskId,
           title: task.title,
           instruction: task.instruction,
           role: task.role,
+          dependsOn: task.dependsOn,
         })),
       },
       input.onEvent,
@@ -108,7 +210,42 @@ export const orchestratorService = {
      */
     const taskResults: TaskResult[] = [];
 
-    for (const task of taskPlan.tasks) {
+    for (const task of orderedTasks) {
+      throwIfAborted(input.signal, "Orchestration aborted during task execution.");
+      const dependencyResults = getDependencyResults(task, taskResults);
+      const failedDependencies = dependencyResults.filter((result) => result.status !== "completed");
+
+      if (failedDependencies.length > 0) {
+        const errorMessage = `Blocked by failed dependencies: ${failedDependencies
+          .map((result) => result.taskId)
+          .join(", ")}`;
+        logger.warn("Orchestrator skipped task due to failed dependencies", {
+          taskId: task.taskId,
+          dependsOn: task.dependsOn ?? [],
+          failedDependencies: failedDependencies.map((result) => result.taskId),
+        });
+        taskResults.push({
+          taskId: task.taskId,
+          role: task.role,
+          title: task.title,
+          status: "failed",
+          output: errorMessage,
+        });
+        await emitEvent(
+          {
+            type: "subtask_failed",
+            sessionId: input.context.sessionId,
+            taskId: task.taskId,
+            title: task.title,
+            role: task.role,
+            dependsOn: task.dependsOn,
+            error: errorMessage,
+          },
+          input.onEvent,
+        );
+        continue;
+      }
+
       await emitEvent(
         {
           type: "subtask_started",
@@ -116,12 +253,13 @@ export const orchestratorService = {
           taskId: task.taskId,
           title: task.title,
           role: task.role,
+          dependsOn: task.dependsOn,
         },
         input.onEvent,
       );
 
       try {
-        const taskResult = await executeTask(task, input, taskResults);
+        const taskResult = await executeTask(task, input, dependencyResults);
         taskResults.push(taskResult);
         await emitEvent(
           {
@@ -130,6 +268,7 @@ export const orchestratorService = {
             taskId: task.taskId,
             title: task.title,
             role: task.role,
+            dependsOn: task.dependsOn,
             output: taskResult.output,
           },
           input.onEvent,
@@ -155,6 +294,7 @@ export const orchestratorService = {
             taskId: task.taskId,
             title: task.title,
             role: task.role,
+            dependsOn: task.dependsOn,
             error: errorMessage,
           },
           input.onEvent,
@@ -170,12 +310,13 @@ export const orchestratorService = {
       taskResults,
       historyMessages: input.historyMessages,
       onEvent: input.onEvent,
+      signal: input.signal,
     });
     await emitEvent(
       {
         type: "orchestration_completed",
         sessionId: input.context.sessionId,
-        taskCount: taskPlan.tasks.length,
+        taskCount: effectiveTaskPlan.tasks.length,
         completedTaskCount: taskResults.filter((result) => result.status === "completed").length,
       },
       input.onEvent,
@@ -188,7 +329,7 @@ export const orchestratorService = {
     return {
       reply: synthesis.reply,
       generatedMessages: synthesis.generatedMessages,
-      taskPlan,
+      taskPlan: effectiveTaskPlan,
       taskResults,
     };
   },

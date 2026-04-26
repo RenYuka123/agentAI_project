@@ -1,4 +1,5 @@
 import { assessOrchestration, orchestratorService } from "../../orchestration/index.js";
+import { throwIfAborted } from "../../../utils/abort.js";
 import { logger } from "../../../utils/logger.js";
 import { sessionService } from "../../session/index.js";
 import { resolveSkillSelection } from "../../skills/index.js";
@@ -17,6 +18,8 @@ export interface RunAgentInput {
   message: string;
   /** 流式模式下的事件回呼。 */
   onEvent?: AgentStreamEventHandler;
+  /** 用來中止本輪 request 的 signal。 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -48,7 +51,7 @@ export const agentService = {
    * @returns 帶有 sessionId 的 agent 最終回覆。
    */
   async run(input: RunAgentInput): Promise<RunAgentResult> {
-    const { message, onEvent, sessionId, skillName } = input;
+    const { message, onEvent, sessionId, signal, skillName } = input;
     logger.info("Agent service received request", {
       messagePreview: message.slice(0, 120),
       messageLength: message.length,
@@ -112,6 +115,7 @@ export const agentService = {
         userMessage: message,
         skillName: resolvedSkillName,
       },
+      signal,
     });
     logger.info("Agent service assessed orchestration", {
       sessionId: session.sessionId,
@@ -137,6 +141,7 @@ export const agentService = {
           },
           historyMessages,
           onEvent,
+          signal,
         })
       : await runAgentLoop({
           userMessage: message,
@@ -144,7 +149,11 @@ export const agentService = {
           skillName: resolvedSkillName,
           roleName: "primary",
           onEvent,
+          signal,
         });
+
+    // 寫入資料前再檢查一次取消狀態，避免 client 已離線仍把半完成流程持久化。
+    throwIfAborted(signal, "Agent request aborted before persistence.");
 
     /**
      * 不論本輪是單 agent 還是 multi-agent，最後都統一在這裡：

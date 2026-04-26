@@ -1,7 +1,13 @@
 import type { JsonObject, JsonValue } from "../../../types/common.types.js";
+import { createAbortError, createTimedAbortController, throwIfAborted } from "../../../utils/abort.js";
 import { logger } from "../../../utils/logger.js";
 import { ToolError, normalizeToolError } from "./tool-errors.js";
-import type { AnyAgentTool, ToolExecutionError, ToolExecutionResult } from "./tool.types.js";
+import type {
+  AnyAgentTool,
+  ToolExecutionContext,
+  ToolExecutionError,
+  ToolExecutionResult,
+} from "./tool.types.js";
 
 /**
  * 在指定時間內執行非同步工作，超時時回傳標準工具錯誤。
@@ -11,22 +17,30 @@ import type { AnyAgentTool, ToolExecutionError, ToolExecutionResult } from "./to
  * @param toolName 工具名稱。
  * @returns 工作完成結果。
  */
-const withTimeout = async <T>(task: Promise<T>, timeoutMs: number, toolName: string): Promise<T> =>
-  new Promise<T>((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      reject(new ToolError("TOOL_TIMEOUT", `${toolName} 執行逾時。`, true));
-    }, timeoutMs);
+const withTimeout = async <T>(
+  taskFactory: (context: ToolExecutionContext) => Promise<T>,
+  timeoutMs: number,
+  toolName: string,
+  parentSignal?: AbortSignal,
+): Promise<T> => {
+  const { cleanup, signal } = createTimedAbortController(timeoutMs, parentSignal);
 
-    task
-      .then((value) => {
-        clearTimeout(timeoutId);
-        resolve(value);
-      })
-      .catch((error: unknown) => {
-        clearTimeout(timeoutId);
-        reject(error);
-      });
-  });
+  try {
+    return await taskFactory({ signal });
+  } catch (error) {
+    if (signal.aborted) {
+      if (parentSignal?.aborted) {
+        throw createAbortError(`${toolName} execution aborted by parent signal.`);
+      }
+
+      throw new ToolError("TOOL_TIMEOUT", `${toolName} 執行逾時或已取消。`, true);
+    }
+
+    throw error;
+  } finally {
+    cleanup();
+  }
+};
 
 /**
  * 構建統一格式的工具執行結果。
@@ -99,9 +113,14 @@ const logToolResult = (
  * @param input 原始工具輸入。
  * @returns 統一格式的工具執行結果。
  */
-export const executeTool = async (tool: AnyAgentTool, input: JsonObject): Promise<ToolExecutionResult> => {
+export const executeTool = async (
+  tool: AnyAgentTool,
+  input: JsonObject,
+  context: ToolExecutionContext = {},
+): Promise<ToolExecutionResult> => {
   const startedAt = new Date();
   const maxAttempts = tool.metadata.retryable ? Math.max(1, tool.metadata.maxRetries + 1) : 1;
+  const { signal } = context;
 
   logger.info("Tool executor started", {
     toolName: tool.name,
@@ -112,6 +131,8 @@ export const executeTool = async (tool: AnyAgentTool, input: JsonObject): Promis
   });
 
   try {
+    throwIfAborted(signal, `Tool ${tool.name} aborted before validation.`);
+
     /**
      * 先統一做輸入驗證與正規化，避免後續每次重試都重複解析原始輸入。
      */
@@ -124,12 +145,18 @@ export const executeTool = async (tool: AnyAgentTool, input: JsonObject): Promis
      */
     while (attempt < maxAttempts) {
       attempt += 1;
+      throwIfAborted(signal, `Tool ${tool.name} aborted before attempt ${attempt}.`);
 
       try {
         /**
          * 每次真正執行工具時都套上 timeout 保護，避免外部服務或工具邏輯卡住。
          */
-        const data = await withTimeout(tool.execute(normalizedInput), tool.metadata.timeoutMs, tool.name);
+        const data = await withTimeout(
+          (executionContext) => tool.execute(normalizedInput, executionContext),
+          tool.metadata.timeoutMs,
+          tool.name,
+          signal,
+        );
         const finishedAt = new Date();
         const result = buildToolResult(tool, startedAt, finishedAt, {
           status: "success",
@@ -177,6 +204,10 @@ export const executeTool = async (tool: AnyAgentTool, input: JsonObject): Promis
     logToolResult(result, "failed");
     return result;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw createAbortError(`Tool ${tool.name} aborted.`);
+    }
+
     /**
      * 這裡通常代表工具還沒真正執行就失敗，例如輸入驗證沒有通過。
      */

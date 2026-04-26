@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { PNG } from "pngjs";
 import { llmConfig } from "../../../config/llm.js";
 import { logger } from "../../../utils/logger.js";
@@ -130,14 +131,29 @@ const isGuessCorrect = (guess: string, answer: string): boolean => {
   );
 };
 
-const pickWrongGuess = (answer: string): string => {
+const pickWrongGuess = (answer: string, seed: string): string => {
   const candidates = DRAW_WORDS.filter((word) => word !== answer);
 
   if (candidates.length === 0) {
     return "???";
   }
 
-  return candidates[Math.floor(Math.random() * candidates.length)] ?? "???";
+  const index = Math.floor(createDeterministicRandom(seed) * candidates.length);
+  return candidates[index] ?? "???";
+};
+
+/**
+ * 讓 heuristic 模式對同一份輸入維持穩定結果，避免每次重新送出都得到不同答案。
+ *
+ * @param seed 用來產生穩定亂數的字串。
+ * @returns 0 到 1 之間的穩定數值。
+ */
+const createDeterministicRandom = (seed: string): number => {
+  const digest = createHash("sha256").update(seed).digest("hex");
+  const head = digest.slice(0, 8);
+  const numericValue = Number.parseInt(head, 16);
+
+  return numericValue / 0xffffffff;
 };
 
 const isGuessConfidence = (value: unknown): value is GuessConfidence => {
@@ -301,6 +317,7 @@ const buildMissComment = (
 const buildHeuristicGuess = (
   analysis: DrawingAnalysis,
   answer: string,
+  imageDataUrl: string,
   timedOut: boolean,
 ): Omit<SinglePlayerGuessResult, "isCorrect"> => {
   if (analysis.isBlank) {
@@ -325,8 +342,12 @@ const buildHeuristicGuess = (
   /* 信心等級判定 (confidence)根據最終機率決定顯示給玩家看的「信心程度」 */
   const confidence: GuessConfidence =
     successChance > 0.72 ? "high" : successChance > 0.42 ? "medium" : "low";
-  /* 隨機決策 (The Moment of Truth) */
-  const guessedCorrectly = Math.random() < successChance;
+  /* 用穩定 seed 取代真正的隨機，讓同一份圖片輸入能得到一致結果。 */
+  const roll = createDeterministicRandom(
+    `${answer}|${timedOut ? "timed-out" : "submitted"}|${imageDataUrl.slice(0, 256)}`,
+  );
+  const wrongGuessSeed = `${answer}|wrong-guess|${imageDataUrl.slice(-256)}`;
+  const guessedCorrectly = roll < successChance;
 
   if (guessedCorrectly) {
     return {
@@ -337,7 +358,7 @@ const buildHeuristicGuess = (
   }
 
   return {
-    guess: pickWrongGuess(answer),
+    guess: pickWrongGuess(answer, wrongGuessSeed),
     comment: buildMissComment(analysis, timedOut),
     confidence: confidence === "high" ? "medium" : "low",
   };
@@ -372,6 +393,7 @@ export const singlePlayerService = {
     const result = buildHeuristicGuess(
       analysis,
       answer,
+      input.imageDataUrl,
       Boolean(input.timedOut),
     );
 

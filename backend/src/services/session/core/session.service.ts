@@ -66,21 +66,38 @@ const ensureSession = async (sessionId?: string): Promise<ChatSession> => {
   const now = new Date();
   const resolvedSessionId = sessionId?.trim() || randomUUID();
 
-  const existingSession = await sessionsCollection.findOne({ sessionId: resolvedSessionId });
+  // 用 upsert 收斂「先查再建」的競態，避免同一 sessionId 併發請求時撞 unique index。
+  await sessionsCollection.updateOne(
+    { sessionId: resolvedSessionId },
+    {
+      $setOnInsert: {
+        sessionId: resolvedSessionId,
+        title: "",
+        createdAt: now,
+        updatedAt: now,
+      },
+    },
+    { upsert: true },
+  );
 
-  if (existingSession) {
-    return existingSession;
+  const ensuredSession = await sessionsCollection.findOne({ sessionId: resolvedSessionId });
+
+  if (!ensuredSession) {
+    throw new Error(`Failed to ensure session: ${resolvedSessionId}`);
   }
 
-  const nextSession: ChatSession = {
-    sessionId: resolvedSessionId,
-    title: "",
-    createdAt: now,
-    updatedAt: now,
-  };
+  return ensuredSession;
+};
 
-  await sessionsCollection.insertOne(nextSession);
-  return nextSession;
+/**
+ * 依 sessionId 讀取單一 session。
+ *
+ * @param sessionId session 識別值。
+ * @returns 找到時回傳 session，否則回傳 null。
+ */
+const getSessionById = async (sessionId: string): Promise<ChatSession | null> => {
+  const sessionsCollection = await getSessionsCollection();
+  return sessionsCollection.findOne({ sessionId });
 };
 
 /**
@@ -239,12 +256,21 @@ const getSessionList = async (): Promise<ChatSessionSummary[]> => {
  *
  * @param sessionId session 識別值。
  */
-const deleteSession = async (sessionId: string): Promise<void> => {
+const deleteSession = async (sessionId: string): Promise<boolean> => {
   const sessionsCollection = await getSessionsCollection();
   const messagesCollection = await getMessagesCollection();
 
+  const existingSession = await sessionsCollection.findOne({ sessionId });
+
+  if (!existingSession) {
+    return false;
+  }
+
+  // 先刪 messages 再刪 session，至少保證對外不會留下仍可被讀取的舊內容。
   await messagesCollection.deleteMany({ sessionId });
-  await sessionsCollection.deleteOne({ sessionId });
+  const deleteResult = await sessionsCollection.deleteOne({ sessionId });
+
+  return deleteResult.deletedCount === 1;
 };
 
 /**
@@ -252,6 +278,7 @@ const deleteSession = async (sessionId: string): Promise<void> => {
  */
 export const sessionService = {
   ensureSession,
+  getSessionById,
   ensureSessionTitle,
   getRecentMessages,
   getVisibleMessages,

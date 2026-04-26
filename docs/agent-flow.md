@@ -1,11 +1,57 @@
 # Agent 流程文件
 
-這份文件整理目前專案中 Agent 後端的主要流程，方便對照程式碼理解：
+這份文件整理目前專案中 Agent 後端的主要流程與目前架構，方便對照程式碼理解：
 
 - 使用者訊息如何進入後端
 - 模型如何判斷是否需要工具
 - 工具結果如何再回到模型
+- orchestration gate 如何決定 single agent / multi-agent
+- planner / worker / synthesizer 如何協作
 - 最終答案如何回傳給前端
+
+## 目前架構
+
+目前可以把系統分成 4 層：
+
+### 1. Agent 基礎執行層
+
+- `services/agent`
+- `services/llm`
+- `services/tools`
+- `services/skills`
+
+這層負責單一 agent loop、prompt、模型決策、工具執行與 skill 場景控制。
+
+### 2. Session / API 應用層
+
+- `routes`
+- `controllers`
+- `agent.service.ts`
+- `sessionService`
+
+這層負責接 request、綁定 session、讀歷史、解析 skill，並決定本輪走 single agent 還是 orchestration。
+
+目前這層也負責 request lifecycle control：
+
+- controller 會建立 request-scoped `AbortController`
+- `AbortSignal` 會一路傳到 agent / orchestration / LLM / tools
+- SSE client 中途斷線時，後端會停止本輪工作，而不是繼續把整條流程跑完
+
+### 3. Orchestration 協調層
+
+- `assessOrchestration()`
+- `createTaskPlan()`
+- `orchestratorService`
+- `synthesizeTaskResults()`
+
+這層負責 gate、task planning、task dependency、worker 執行順序與最終整合。
+
+### 4. Frontend 可觀測層
+
+- `ChatView.vue`
+- timeline SSE events
+
+這層不只是聊天 UI，也承擔開發期 debug console 的角色，方便觀察 gate、planner、worker 與工具流程。
 
 ## 整體流程
 
@@ -14,15 +60,16 @@ flowchart TD
     A[Frontend / Client] --> B[API Route]
     B --> C[Agent Controller]
     C --> D[Agent Service]
-    D --> E[Agent Loop]
-    E --> F[LLM Decision]
-    F -->|final| G[Final Answer]
-    F -->|tool_call| H[Tool Registry]
-    H --> I[Tool Execute]
-    I --> J[Tool Result]
-    J --> E
-    G --> C
-    C --> K[Response]
+    D --> E[Skill Selection]
+    E --> F[Orchestration Gate]
+    F -->|single agent| G[Agent Loop]
+    F -->|multi-agent| H[Planner / Task Plan]
+    H --> I[Worker Tasks]
+    I --> J[Synthesizer]
+    G --> K[Final Answer]
+    J --> K
+    K --> C
+    C --> L[Response]
 ```
 
 ## 時序圖
@@ -157,6 +204,72 @@ flowchart LR
 }
 ```
 
+## Orchestration 機制
+
+目前 orchestration 採用 `orchestrator -> planner -> worker -> synthesizer` 的可控流程，而不是 agent 彼此自由對話。
+
+### Gate 決策
+
+`agent.service.ts` 會先呼叫 `assessOrchestration()`，判斷本輪該走：
+
+- `single_agent`
+- `sequential_multi_agent`
+
+目前 gate 已經是 hybrid 版本：
+
+- 先做 rule-based scoring
+- 再對模糊區間交給 LLM router 做二次判斷
+
+### 目前 gate 主要訊號
+
+- `messageLength`
+- `connectorCount`
+- `intentCount`
+- `dependencyCueCount`
+- `parallelCueCount`
+- `estimatedTaskCount`
+- `estimatedDependencyDepth`
+- `isDependencyChainLikely`
+- `matchedSkillName`
+
+其中 `dependencyCueCount` / `parallelCueCount` / `estimatedDependencyDepth`
+是近期加入的 dependency-aware signals，用來分辨：
+
+- 比較像線性依賴鏈的需求
+- 比較值得拆成多個 task 的需求
+
+### Task Planning
+
+當 gate 決定進入 orchestration 後，系統會先建立 `TaskPlan`。
+
+目前 `PlannedTask` 主要欄位：
+
+- `taskId`
+- `title`
+- `instruction`
+- `role`
+- `dependsOn`
+
+`dependsOn` 用來表達前置任務依賴，讓 orchestrator 可以依 dependency 排序執行，而不是只照陣列順序跑。
+
+### Dependency-aware Execution
+
+目前 orchestrator 已支援：
+
+- 驗證 dependency 是否指向合法 `taskId`
+- 依 dependency 做拓樸排序
+- 任務執行時只注入它依賴的前置結果
+- 若前置 task 失敗，依賴它的 task 會標成 blocked / failed
+- 若 planner 回了壞掉或循環 dependency，會改建一份安全的 fallback task plan
+
+### 目前限制
+
+目前仍然偏向可控 pipeline，而不是完整 workflow engine：
+
+- 先以 sequential execution 為主
+- worker 之間交換資料仍以文字輸出為主
+- `dependsOn` 已經能表達任務順序，但還沒有 artifact / shared state model
+
 ## 多工具串接策略
 
 目前專案採用「多輪單工具串接」策略，而不是一次要求模型回傳多個工具呼叫。
@@ -286,6 +399,7 @@ flowchart LR
   - 抽象 LLM 呼叫
 - `providers/`
   - 目前透過 OpenAI-compatible provider 呼叫 Groq
+  - 已支援 request-level abort / timeout 傳遞
 
 ### 5. `services/tools`
 
@@ -296,6 +410,101 @@ flowchart LR
   - 驗證輸入
   - 執行邏輯
   - 回傳結果
+  - fetch 型工具可吃 `AbortSignal`
+
+### 6. `services/orchestration`
+
+- `core/task-planner.ts`
+  - orchestration gate
+  - planner prompt
+  - fallback task plan
+- `core/orchestrator.service.ts`
+  - task dependency 驗證
+  - dependency-aware execution order
+  - worker orchestration
+- `core/result-synthesizer.ts`
+  - 將子任務結果整合成最終答案
+
+### 7. `services/session`
+
+- `core/session.service.ts`
+  - session 建立與讀取
+  - messages append / query / delete
+  - `ensureSession` 已改為 `upsert` 風格，避免同 session 併發建立 race
+
+## 近期可靠性補強
+
+這輪後端有幾個值得記住的行為變化：
+
+### Request cancellation
+
+- `chatStream` 若 client disconnect，SSE 流會中止
+- 後續 LLM 呼叫、tool execution、orchestration 不會繼續浪費資源
+
+### Session API semantics
+
+- 讀取不存在 session 的 messages，API 會回 `404`
+- 刪除不存在 session，API 會回 `404`
+- 不再把「空訊息」和「session 不存在」視為同一種狀態
+
+### Skill carry-over 修正
+
+- `calculator` 歷史不會單獨觸發 `investment_analysis`
+- 要延續 investment skill，需要投資語境或 stock tool 痕跡
+
+### Draw 穩定性
+
+- single-player 在沒有 vision 能力時，fallback heuristic 改成 deterministic
+- multiplayer 的 room binding 改綁在 `socket.data.activeRoomId`
+- 不再依賴鬆散的全域 room map 追蹤 socket 所在房間
+
+## 自動化測試現況
+
+backend 目前已補上一組輕量 smoke tests。
+
+### 入口
+
+- `backend/tests/run-tests.ts`
+- `backend/package.json` 的 `pnpm test`
+
+### 目前自動化覆蓋
+
+- missing session `404`
+- skill carry-over 規則
+- orchestration gate 線性依賴 vs 偏並列案例
+- deterministic single-player heuristic
+- SSE disconnect / abort
+- invalid dependency plan rejection
+- draw room binding validation
+
+## 目前最重要的架構判準
+
+### `skill`
+
+- 決定任務場景
+- 限制工具與 prompt 傾向
+
+### `role`
+
+- 決定分工
+- 例如 `primary`、`planner`、`worker`
+
+### `tool`
+
+- 決定能力
+- 例如查資料、計算、摘要
+
+### `orchestration`
+
+- 決定是否要把一個 request 拆成多個 task
+- 決定 task 依賴與整體協作流程
+
+一句話來說：
+
+- `skill` 是場景
+- `role` 是分工
+- `tool` 是能力
+- `orchestration` 是流程編排
 
 ## 目前已接上的工具
 

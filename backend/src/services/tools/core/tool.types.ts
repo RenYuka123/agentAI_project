@@ -68,6 +68,14 @@ export interface ToolExecutionMeta {
 }
 
 /**
+ * 工具執行時可共享的控制資訊。
+ */
+export interface ToolExecutionContext {
+  /** 可用來中止外部 I/O 的 signal。 */
+  signal?: AbortSignal;
+}
+
+/**
  * 工具執行完成後的統一結果格式。
  */
 export interface ToolExecutionResult<TData extends JsonValue = JsonValue> {
@@ -108,7 +116,7 @@ export interface AgentTool<TInput extends JsonObject = JsonObject, TResult exten
    * @param input 驗證後的工具輸入資料。
    * @returns 工具執行完成後的資料內容。
    */
-  execute: (input: TInput) => Promise<TResult>;
+  execute: (input: TInput, context?: ToolExecutionContext) => Promise<TResult>;
   /**
    * 檢查工具目前是否可正常使用。
    *

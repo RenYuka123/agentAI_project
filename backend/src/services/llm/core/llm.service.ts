@@ -1,3 +1,4 @@
+import { throwIfAborted } from "../../../utils/abort.js";
 import { safeJsonParse } from "../../../utils/safe-json.js";
 import { logger } from "../../../utils/logger.js";
 import type { AgentDecision, AgentMessage } from "../../agent/index.js";
@@ -132,9 +133,11 @@ const hasMissingApiKeyError = (error: unknown): boolean =>
   error instanceof Error && error.message.includes("LLM_API_KEY is not configured");
 
 export const llmService = {
-  async askAgentDecision(messages: AgentMessage[]): Promise<AgentDecision> {
+  async askAgentDecision(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentDecision> {
+    throwIfAborted(signal, "LLM decision request aborted before start.");
+
     try {
-      const decision = await provider.getAgentDecision(messages);
+      const decision = await provider.getAgentDecision(messages, signal);
       logger.info("LLM service received provider decision", decision);
       return decision;
     } catch (error) {
@@ -154,11 +157,13 @@ export const llmService = {
     messages: AgentMessage[];
     validate: (value: unknown) => value is T;
     fallback?: () => T;
+    signal?: AbortSignal;
   }): Promise<T> {
-    const { fallback, messages, validate } = input;
+    const { fallback, messages, signal, validate } = input;
+    throwIfAborted(signal, "LLM structured request aborted before start.");
 
     try {
-      const payload = await provider.getJsonResponse(messages);
+      const payload = await provider.getJsonResponse(messages, signal);
 
       if (!validate(payload)) {
         throw new Error("LLM provider returned invalid structured JSON payload.");

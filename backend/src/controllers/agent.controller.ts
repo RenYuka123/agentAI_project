@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { createAbortError } from "../utils/abort.js";
 import { agentService } from "../services/agent/index.js";
 import { sessionService } from "../services/session/index.js";
 import type { AgentStreamEvent } from "../services/agent/index.js";
@@ -18,8 +19,34 @@ import type {
  * @param event 要寫出的事件資料。
  */
 const writeSseEvent = (res: Response, event: AgentStreamEvent): void => {
+  if (res.writableEnded || res.destroyed) {
+    throw createAbortError("SSE response is no longer writable.");
+  }
+
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
+};
+
+/**
+ * 讓 request / response 的中斷可以往下游流程傳遞。
+ *
+ * @param req Express request。
+ * @param res Express response。
+ * @returns 本輪 request 專用的 AbortController。
+ */
+const createRequestAbortController = (req: Request<any, any, any>, res: Response): AbortController => {
+  const controller = new AbortController();
+
+  const abortRequest = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(createAbortError("Client disconnected."));
+    }
+  };
+
+  req.on("close", abortRequest);
+  res.on("close", abortRequest);
+
+  return controller;
 };
 
 /**
@@ -47,10 +74,12 @@ export const chat = async (
   }
 
   try {
+    const requestAbortController = createRequestAbortController(req, res);
     const result = await agentService.run({
       sessionId,
       skillName,
       message,
+      signal: requestAbortController.signal,
     });
 
     res.json({
@@ -59,6 +88,10 @@ export const chat = async (
       reply: result.reply,
     });
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return;
+    }
+
     const errorMessage = error instanceof Error ? error.message : "Internal server error";
 
     res.status(500).json({
@@ -98,16 +131,29 @@ export const chatStream = async (
   res.flushHeaders?.();
 
   try {
+    const requestAbortController = createRequestAbortController(req, res);
     await agentService.run({
       sessionId,
       skillName,
       message,
+      signal: requestAbortController.signal,
       onEvent: async (event) => {
+        if (requestAbortController.signal.aborted) {
+          throw createAbortError("Client disconnected before SSE event was sent.");
+        }
+
         writeSseEvent(res, event);
       },
     });
     res.end();
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      if (!res.writableEnded) {
+        res.end();
+      }
+      return;
+    }
+
     const errorMessage = error instanceof Error ? error.message : "Internal server error";
     writeSseEvent(res, {
       type: "error",
@@ -139,6 +185,17 @@ export const getSessionMessages = async (
   }
 
   try {
+    const session = await sessionService.getSessionById(sessionId);
+
+    if (!session) {
+      res.status(404).json({
+        sessionId,
+        messages: [],
+        error: "Session not found.",
+      });
+      return;
+    }
+
     const messages = await sessionService.getVisibleMessages(sessionId);
 
     res.json({
@@ -213,7 +270,16 @@ export const deleteSession = async (
   }
 
   try {
-    await sessionService.deleteSession(sessionId);
+    const deleted = await sessionService.deleteSession(sessionId);
+
+    if (!deleted) {
+      res.status(404).json({
+        sessionId,
+        deleted: false,
+        error: "Session not found.",
+      });
+      return;
+    }
 
     res.json({
       sessionId,

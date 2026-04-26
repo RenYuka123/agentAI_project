@@ -3,6 +3,7 @@ import type { AgentSkillSelection } from "../../agent/index.js";
 import { getSkillByName, getSkillList } from "./skill-registry.js";
 
 const followUpPattern = /^(那|那如果|那今天|那明天|那現在|那也|再|還有|另外|順便|呢|也幫我|也可以|適合|需要)/i;
+const investmentContextPattern = /(股價|股票|etf|報酬|投資|複利|年化|0050|006208|aapl|tsla)/i;
 
 /**
  * 將訊息整理成 skill 判斷用的文字上下文。
@@ -48,9 +49,20 @@ const inferSkillFromHistory = (historyMessages: AgentMessage[]): string | undefi
   const usedInvestmentTool = recentMessages.some(
     (message) =>
       message.role === "tool" &&
-      (message.toolName === "get_stock_price" || message.toolName === "calculator"),
+      message.toolName === "get_stock_price",
   );
   if (usedInvestmentTool) {
+    return "investment_analysis";
+  }
+
+  const usedCalculator = recentMessages.some(
+    (message) => message.role === "tool" && message.toolName === "calculator",
+  );
+  const hasInvestmentContext = recentMessages.some(
+    (message) => message.role !== "tool" && investmentContextPattern.test(message.content),
+  );
+
+  if (usedCalculator && hasInvestmentContext) {
     return "investment_analysis";
   }
 

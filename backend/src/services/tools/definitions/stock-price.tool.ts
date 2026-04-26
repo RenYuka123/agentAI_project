@@ -97,7 +97,10 @@ const extractLatestStockPrice = (payload: TwseStockDayResponse, symbol: string):
  * @param symbol 股票代號。
  * @returns 成功時回傳報價資料，未設定供應商時回傳 null。
  */
-const fetchStockPrice = async (symbol: string): Promise<StockPriceApiResponse | null> => {
+const fetchStockPrice = async (
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<StockPriceApiResponse | null> => {
   if (!appConfig.stockPriceApiUrl) {
     return null;
   }
@@ -121,6 +124,7 @@ const fetchStockPrice = async (symbol: string): Promise<StockPriceApiResponse | 
           }
         : undefined,
       method: "GET",
+      signal,
     });
 
     if (!response.ok) {
@@ -214,9 +218,9 @@ export const getStockPriceTool: AgentTool<StockPriceToolInput, JsonObject> = {
       symbol,
     };
   },
-  async execute(input) {
+  async execute(input, context) {
     const { symbol } = input;
-    const data = await fetchStockPrice(symbol);
+    const data = await fetchStockPrice(symbol, context?.signal);
 
     if (!data || typeof data.price !== "number") {
       const unavailableResult: JsonObject = {

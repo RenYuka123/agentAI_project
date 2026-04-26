@@ -1,3 +1,4 @@
+import { throwIfAborted } from "../../../utils/abort.js";
 import { logger } from "../../../utils/logger.js";
 import { runAgentLoop } from "../../agent/index.js";
 import type { AgentMessage, AgentStreamEventHandler } from "../../agent/index.js";
@@ -53,9 +54,12 @@ export const synthesizeTaskResults = async (input: {
   taskResults: TaskResult[];
   historyMessages?: AgentMessage[];
   onEvent?: AgentStreamEventHandler;
+  signal?: AbortSignal;
 }): Promise<{ reply: string; generatedMessages: { role: "user" | "assistant"; content: string }[] }> => {
-  const { context, historyMessages = [], onEvent, taskResults } = input;
+  const { context, historyMessages = [], onEvent, signal, taskResults } = input;
   let reply = "";
+
+  throwIfAborted(signal, "Result synthesis aborted before execution.");
 
   /**
    * 優先由 primary role 做最終整合。
@@ -69,6 +73,7 @@ export const synthesizeTaskResults = async (input: {
       roleName: "primary",
       disableTools: true,
       onEvent,
+      signal,
     });
     reply = synthesisResult.answer.trim();
   } catch (error) {

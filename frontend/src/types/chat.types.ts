@@ -82,7 +82,12 @@ export type AgentStreamEvent =
         signals: {
           messageLength: number;
           connectorCount: number;
+          dependencyCueCount: number;
+          parallelCueCount: number;
           intentCount: number;
+          estimatedTaskCount: number;
+          estimatedDependencyDepth: number;
+          isDependencyChainLikely: boolean;
           hasExplicitMultiStepCue: boolean;
           hasFollowUpLanguage: boolean;
           matchedSkillName?: string;
@@ -100,6 +105,7 @@ export type AgentStreamEvent =
         title: string;
         instruction: string;
         role: "primary" | "planner" | "worker";
+        dependsOn?: string[];
       }>;
     }
   | {
@@ -108,6 +114,7 @@ export type AgentStreamEvent =
       taskId: string;
       title: string;
       role: "primary" | "planner" | "worker";
+      dependsOn?: string[];
     }
   | {
       type: "subtask_completed";
@@ -115,6 +122,7 @@ export type AgentStreamEvent =
       taskId: string;
       title: string;
       role: "primary" | "planner" | "worker";
+      dependsOn?: string[];
       output: string;
     }
   | {
@@ -123,6 +131,7 @@ export type AgentStreamEvent =
       taskId: string;
       title: string;
       role: "primary" | "planner" | "worker";
+      dependsOn?: string[];
       error: string;
     }
   | {
